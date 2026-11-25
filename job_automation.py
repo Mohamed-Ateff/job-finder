@@ -951,6 +951,18 @@ def same_job_key(title: str, company: str) -> str:
     return f"{firm}|{re.sub(r'[\W_]+', ' ', (title or '').lower()).strip()}" if firm else ""
 
 
+def _same_firm(a: str, b: str) -> bool:
+    """'qiddiya' and 'qiddiya investment company' are one company (one name starts the other)."""
+    return a == b or a.startswith(b + " ") or b.startswith(a + " ")
+
+
+def _known(key: str, keys) -> bool:
+    if not key:
+        return False
+    firm, title = key.split("|", 1)
+    return any(t == title and _same_firm(firm, f) for f, t in (k.split("|", 1) for k in keys))
+
+
 def dedupe(jobs: list[dict], seen_urls: set[str], seen_signatures: set[str] | None = None,
            seen_keys: set[str] | None = None) -> list[dict]:
     """Exact pass only: canonical URL, the title|company|location signature, and company + title
@@ -961,11 +973,11 @@ def dedupe(jobs: list[dict], seen_urls: set[str], seen_signatures: set[str] | No
     already = dupes = 0
     for job in jobs:
         key = same_job_key(job.get("title", ""), job.get("company", ""))
-        if job["url"] in seen_urls or job["signature"] in seen_signatures or (key and key in seen_keys):
+        if job["url"] in seen_urls or job["signature"] in seen_signatures or _known(key, seen_keys):
             already += 1
             continue
-        if job["url"] in urls or job["signature"] in signatures or (key and key in by_key):
-            twin = by_key.get(key)
+        if job["url"] in urls or job["signature"] in signatures or _known(key, by_key):
+            twin = next((by_key[k] for k in by_key if _known(key, [k])), None) if key else None
             if twin is not None and len(job.get("description") or "") > len(twin.get("description") or ""):
                 twin["description"] = job["description"]
             dupes += 1

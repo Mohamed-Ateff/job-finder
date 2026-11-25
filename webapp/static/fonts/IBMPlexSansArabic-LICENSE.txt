@@ -1,0 +1,6 @@
+IBM Plex Sans Arabic (IBMPlexSansArabic-400/500/600/700.woff2, Arabic subset)
+Copyright © 2017 IBM Corp. with Reserved Font Name "Plex".
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+The full license text is available at https://openfontlicense.org/open-font-license-official-text/
+Source: https://github.com/IBM/plex

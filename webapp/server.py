@@ -42,7 +42,10 @@ from pydantic import BaseModel, Field  # noqa: E402
 
 import cv_import  # noqa: E402
 import job_automation as ja  # noqa: E402
+import cv_pdf  # noqa: E402
+import mailer  # noqa: E402
 import profiles  # noqa: E402
+import questionnaire  # noqa: E402
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 ENV_FILE = ROOT / ".env"
@@ -622,6 +625,11 @@ class RunManager:
         for line in proc.stdout:
             run.feed(line.rstrip("\n"))
         run.returncode = proc.wait()
+        if run.returncode == 0 and run.mode in ("real", "replay") and run.stamp and not demo_on():
+            try:
+                run.feed(email_run_matches(run.candidate, run.runs_root / run.candidate / run.stamp))
+            except Exception as exc:  # noqa: BLE001 - the search itself worked; say why the email didn't
+                run.feed(f"email: not sent - {exc}")
         run.status = {0: "finished", 2: "busy"}.get(run.returncode, "failed")
         run.ended = time.time()
         folder = run.runs_root / run.candidate / (run.stamp or "")
@@ -761,16 +769,13 @@ def job_detail(c: ja.Candidate, url: str) -> dict | None:
             "description": job.get("description", "")}
 
 
-@app.get("/api/cv/{key}")
-def tailored_cv(key: str, url: str):
-    """The CV for one job, made when it's downloaded: from the profile as it is now, tailored to this
-    posting (its title, its terms first), still checked against the person's disclosure rules."""
+DOCX_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def cv_files(c: ja.Candidate, job: dict, pdf: bool = False) -> tuple[str, bytes, bytes | None]:
+    """The CV for one job, made now from the profile as it is: (Word file name, Word bytes, PDF bytes)."""
     import basic_ai
 
-    c = candidate(key)
-    job = job_detail(c, url)
-    if not job:
-        raise HTTPException(404, "Unknown job")
     with _cv_lock:
         previous = ja.CANDIDATE
         ja.CANDIDATE = c
@@ -779,12 +784,216 @@ def tailored_cv(key: str, url: str):
             cv = basic_ai.BasicAI(c, ja).tailor(job, track)
             if ja.cv_leaks(cv):
                 cv = ja.scrub_cv(cv)
-            data = ja.render_cv_docx(cv, ja.load_cv_profile())
+            fixed = ja.load_cv_profile()
+            docx = ja.render_cv_docx(cv, fixed)
+            pdf_bytes = cv_pdf.render(cv, fixed, c.name) if pdf else None
             name = ja.cv_file_name(job)
         finally:
             ja.CANDIDATE = previous
-    return Response(data, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+    return name, docx, pdf_bytes
+
+
+@app.get("/api/cv/{key}")
+def tailored_cv(key: str, url: str, format: str = "docx"):
+    """The CV for one job, made when it's downloaded (Word, or PDF with format=pdf)."""
+    c = candidate(key)
+    job = job_detail(c, url)
+    if not job:
+        raise HTTPException(404, "Unknown job")
+    name, docx, pdf = cv_files(c, job, pdf=format == "pdf")
+    if pdf:
+        return Response(pdf, media_type="application/pdf",
+                        headers={"Content-Disposition": f'attachment; filename="{name[:-5]}.pdf"'})
+    return Response(docx, media_type=DOCX_TYPE, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+# ------------------------------------------------------------------ email --
+MAX_EMAIL_JOBS = 10
+
+
+def _two_lines(text: str, limit: int = 260) -> str:
+    """About two lines of a posting: whole sentences up to the limit."""
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text or "")).strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+    return cut[: end + 1] if end > limit * 0.45 else cut.rsplit(" ", 1)[0] + "…"
+
+
+def email_html(person: str, jobs: list[dict], intro: str) -> str:
+    """A plain, readable email (tables and inline styles, so every mail app shows it the same)."""
+    from html import escape as e
+
+    colours = {"strong": "#2f7a4d", "good": "#2e5e9e", "moderate": "#a2620f", "weak": "#9a978f"}
+    rows = []
+    for j in jobs:
+        url = j["url"] if str(j.get("url", "")).startswith(("https://", "http://")) else ""
+        verdict = j.get("fit_verdict") or ja.verdict(int(j.get("fit_score") or 0))
+        about = _two_lines(j.get("summary") or j.get("description") or "")
+        why = (j.get("reasoning") or "").strip()
+        place = " · ".join(x for x in (j.get("company"), j.get("location")) if x)
+        title = f'<a href="{e(url)}" style="color:#1b1a17;text-decoration:none">{e(j["title"])}</a>' if url else e(j["title"])
+        rows.append(f"""
+<tr><td style="padding:20px 0;border-top:1px solid #e3e1db">
+  <div style="font-size:12.5px;color:#5f5d57">{e(place)}</div>
+  <div style="font-size:17px;font-weight:600;line-height:1.35;margin:3px 0 6px">{title}</div>
+  <div style="font-size:13px;margin-bottom:10px"><b style="color:{colours.get(verdict, '#1b1a17')}">{int(j.get('fit_score') or 0)}</b>
+    <span style="color:#5f5d57"> / 100 · {e(verdict.title())} fit</span></div>
+  {f'<p style="margin:0 0 8px;font-size:14px;line-height:1.55"><b>About the role.</b> {e(about)}</p>' if about else ''}
+  {f'<p style="margin:0 0 12px;font-size:14px;line-height:1.55"><b>Why you fit.</b> {e(why)}</p>' if why else ''}
+  {f'<a href="{e(url)}" style="display:inline-block;background:#1b1a17;color:#ffffff;text-decoration:none;font-size:13px;font-weight:600;padding:9px 16px;border-radius:7px">Open the job</a>' if url else ''}
+  <span style="font-size:12px;color:#9a978f;padding-left:10px">CV attached: {e(j.get('cv_name', ''))} (PDF and Word)</span>
+</td></tr>""")
+    return f"""<!DOCTYPE html><html><body style="margin:0;background:#faf9f6">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#faf9f6"><tr><td align="center" style="padding:28px 16px">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#1b1a17">
+<tr><td style="padding-bottom:14px"><div style="font-size:22px;font-weight:700">{e(intro)}</div>
+<div style="font-size:13px;color:#5f5d57;margin-top:4px">For {e(person)} · {datetime.now():%d %b %Y}</div></td></tr>
+{''.join(rows)}
+<tr><td style="padding-top:18px;border-top:1px solid #e3e1db;font-size:12px;color:#9a978f">Each CV is made from the profile for that job. Check it before you send it.</td></tr>
+</table></td></tr></table></body></html>"""
+
+
+def resend_env(c: ja.Candidate) -> str:
+    """Where one person's own Resend key is kept (.env, never sent to the browser)."""
+    return "RESEND_API_KEY_" + re.sub(r"[^A-Z0-9]+", "_", c.key.upper())
+
+
+def resend_key_for(c: ja.Candidate) -> str | None:
+    return os.environ.get(resend_env(c), "").strip() or None
+
+
+def send_jobs_email(c: ja.Candidate, jobs: list[dict], to: str, intro: str, subject: str) -> int:
+    """One email: the jobs, each with its CV as PDF and Word. Returns how many were sent.
+    Sent with the person's own Resend key when their profile has one, else the app's."""
+    files = []
+    for j in jobs:
+        name, docx, pdf = cv_files(c, j, pdf=True)
+        j["cv_name"] = name[:-5]
+        files += [(f"{name[:-5]}.pdf", pdf, "application/pdf"), (name, docx, DOCX_TYPE)]
+    mailer.send(to, subject, email_html(c.name, jobs, intro), files, from_name="Job Finder",
+                resend_key=resend_key_for(c))
+    return len(jobs)
+
+
+def email_status(c: ja.Candidate) -> dict:
+    prof, _ = profile_data(c)
+    return {"key": c.key, "name": c.name, "email": prof.get("notify_email", ""),
+            "has_key": bool(resend_key_for(c) or mailer.method())}
+
+
+@app.get("/api/profile/{key}/email")
+def profile_email(key: str):
+    """One person's email setup (Settings, Email): where their matches go, and whether a key is saved."""
+    return email_status(candidate(key))
+
+
+class EmailSetupRequest(BaseModel):
+    email: str = Field("", max_length=200)
+    key: str = Field("", max_length=200)
+    test: bool = True
+
+
+@app.post("/api/profile/{key}/email")
+def save_profile_email(key: str, body: EmailSetupRequest):
+    """Save where one person's matches go and their Resend key (kept in .env, never shown again), then
+    send them a test. Each person's emails go only to their own address. An empty address turns emails off."""
+    c = candidate(key)
+    email = body.email.strip()
+    if email and not re.fullmatch(r"[^@\s,]+@[^@\s,]+\.[^@\s,]+", email):
+        raise HTTPException(400, "The email address doesn't look right.")
+    new = body.key.strip()
+    if new:
+        if not re.fullmatch(r"re_[A-Za-z0-9_]{8,}", new):
+            raise HTTPException(400, "That isn't a Resend key. It starts with re_ - copy it from resend.com, API Keys.")
+        write_env({resend_env(c): new})
+    current, _ = profile_data(c)
+    if current.get("notify_email", "") != email:
+        profiles.write(ja.CANDIDATES_DIR, c.key, clean_profile({**current, "notify_email": email}, current))
+    if email and body.test:
+        if not (resend_key_for(c) or mailer.method()):
+            raise HTTPException(400, "Paste the Resend key too: step 2.")
+        try:
+            mailer.send(email, "Job Finder: email works", f"<p>Email is set up for {c.name}. The best matches of each "
+                        "search will arrive like this, with their CVs attached.</p>", resend_key=resend_key_for(c))
+        except mailer.MailError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    return email_status(candidate(key))
+
+
+def email_run_matches(key: str, folder: Path) -> str:
+    """After a search: its best matches in one email to the address in the profile. Returns a log line."""
+    c = candidate(key)
+    prof, _ = profile_data(c)
+    to = prof.get("notify_email", "")
+    if not to:
+        return "email: not set up for this person (Settings, Email) - nothing sent"
+    hidden = load_hidden(c)
+    found = [j for j in read_json(folder / "evaluated.json", []) or []
+             if j.get("fit_verdict") in ("strong", "good") and j.get("url") not in hidden]
+    if not found:
+        return "email: no strong or good matches this time - nothing sent"
+    best = sorted(found, key=lambda j: -int(j.get("fit_score") or 0))[:MAX_EMAIL_JOBS]
+    jobs = [job_detail(c, j["url"]) or j for j in best]
+    n = len(jobs)
+    send_jobs_email(c, jobs, to, f"{n} new {'match' if n == 1 else 'matches'}",
+                    f"{n} new job {'match' if n == 1 else 'matches'} for {first_name(c.name)} - {datetime.now():%d %b}")
+    return f"email: sent {n} matches with their CVs to {to}"
+
+
+class EmailJobRequest(BaseModel):
+    candidate: str
+    url: str
+
+
+@app.post("/api/email-job")
+def email_job(body: EmailJobRequest):
+    """One job, with its CV as PDF and Word, to the address in the profile."""
+    c = candidate(body.candidate)
+    job = job_detail(c, body.url)
+    if not job:
+        raise HTTPException(404, "Unknown job")
+    prof, _ = profile_data(c)
+    to = prof.get("notify_email", "")
+    if not to:
+        raise HTTPException(400, "Set up email for this person first: Settings, Email.")
+    try:
+        send_jobs_email(c, [job], to, job["title"], f"{job['title']} - {job.get('company', '')}".strip(" -"))
+    except mailer.MailError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "to": to}
+
+
+@app.get("/api/mail")
+def mail_setup():
+    """Email setup: whether it's ready (the key itself is never sent back)."""
+    return {"method": mailer.method(), "has_key": bool(os.environ.get("RESEND_API_KEY", "").strip())}
+
+
+class MailSetupRequest(BaseModel):
+    key: str = Field("", max_length=200)
+    test_to: str = Field("", max_length=200)
+
+
+@app.post("/api/mail")
+def save_mail(body: MailSetupRequest):
+    """Save the Resend key, then send a test email to check it works."""
+    key = body.key.strip()
+    if key:
+        if not re.fullmatch(r"re_[A-Za-z0-9_]{8,}", key):
+            raise HTTPException(400, "That isn't a Resend key. It starts with re_ - copy it from resend.com, API Keys.")
+        write_env({"RESEND_API_KEY": key})
+    to = body.test_to.strip()
+    if to:
+        if not re.fullmatch(r"[^@\s,]+@[^@\s,]+\.[^@\s,]+", to):
+            raise HTTPException(400, "The test address doesn't look right.")
+        try:
+            mailer.send(to, "Job Finder: email works", "<p>Email is set up. The best matches of each search "
+                        "will arrive like this, with their CVs attached.</p>")
+        except mailer.MailError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    return {"method": mailer.method()}
 
 
 class DeleteJobRequest(BaseModel):
@@ -1101,13 +1310,18 @@ class SaveProfileRequest(BaseModel):
 
 
 def read_upload(upload: FileUpload) -> dict:
-    """An uploaded CV -> {'fields', 'found'}; a readable 400 when it can't be used."""
+    """An uploaded questionnaire or CV -> {'fields', 'found', 'source'}; a readable 400 when it can't be used."""
     try:
         data = base64.b64decode(upload.data, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise HTTPException(400, "The file didn't arrive in one piece. Try again.") from exc
     try:
-        return cv_import.parse(cv_import.extract_text(upload.filename, data))
+        answers = questionnaire.read(upload.filename, data) if len(data) <= cv_import.MAX_BYTES else None
+        if answers:
+            return answers
+        # A CV, a Career Discovery record, or a CV followed by its record ("source" says which).
+        texts = cv_import.extract_texts(upload.filename, data)        # a PDF: stored order, and page order
+        return cv_import.read_document(texts[0], texts[1:])
     except cv_import.ImportError_ as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -1119,7 +1333,7 @@ def clean_profile(data: dict, base: dict | None = None) -> dict:
         raise HTTPException(400, str(exc)) from exc
 
 
-def profile_view(c: ja.Candidate, found: list[str] | None = None) -> dict:
+def profile_view(c: ja.Candidate, found: list[str] | None = None, source: str = "") -> dict:
     """Everything the Profile page shows and edits for one person."""
     prof, saved = profile_data(c)
     cfg = candidate_config(c.key)
@@ -1140,7 +1354,8 @@ def profile_view(c: ja.Candidate, found: list[str] | None = None) -> dict:
         "open": len(profiles.missing(prof)) + total - done,
         "groups": groups,
         "options": {"countries": profiles.COUNTRIES, "levels": profiles.LEVELS,
-                    "sites": [{"key": k, "label": label} for k, label in ja.SITES.items()]},
+                    "sites": [{"key": k, "label": label} for k, label in ja.SITES.items()],
+                    "work_modes": profiles.WORK_MODES, "job_types": profiles.JOB_TYPES},
         "system_label": c.system_label,
         "tracks": tracks,
         "draft": c.kind == "advanced",          # Atef's tracks are a draft until the client approves them
@@ -1148,6 +1363,8 @@ def profile_view(c: ja.Candidate, found: list[str] | None = None) -> dict:
         "chatgpt": chatgpt_on(),
         "searches": max(1, -(-len(c.keywords) // ja.KEYWORDS_PER_QUERY)) if c.keywords else 0,
         "found": found or [],
+        "source": source,                       # what was just imported: "questionnaire" or "cv"
+        "mail": {"own_key": bool(resend_key_for(c)), "app_key": bool(mailer.method())},
     }
 
 
@@ -1161,34 +1378,59 @@ def save_profile(key: str, body: SaveProfileRequest):
     """Save the whole profile (the page sends it after every change)."""
     c = candidate(key)
     current, _ = profile_data(c)
-    profiles.write(ja.CANDIDATES_DIR, key, clean_profile(body.profile, current))
+    # Where emails go is set in Settings, Email - the profile page never changes it.
+    page = {**body.profile, "notify_email": current.get("notify_email", "")}
+    profiles.write(ja.CANDIDATES_DIR, key, clean_profile(page, current))
     return profile_view(candidate(key))
 
 
 @app.post("/api/profiles")
 def create_profile(body: CreateProfileRequest):
-    """Add a person: from a name, or from their CV (PDF or Word), or both."""
-    imported = read_upload(body.file) if body.file else {"fields": {}, "found": []}
+    """Add a person: from a name, or from their filled-in questionnaire or CV, or both."""
+    imported = read_upload(body.file) if body.file else {"fields": {}, "found": [], "source": ""}
     draft = cv_import.merge(profiles.blank(), imported["fields"])
     if body.name.strip():
         draft["name"] = body.name.strip()
     if not draft["name"]:
-        raise HTTPException(400, "No name was found in the CV. Type the person's full name, then create the profile.")
+        where = {"questionnaire": "questionnaire", "record": "discovery record"}.get(imported["source"], "CV")
+        raise HTTPException(400, f"No name was found in the {where}. Type the person's full name, then create the profile.")
     if not draft["search"]["titles"] and draft.get("headline"):
         draft["search"]["titles"] = [draft["headline"].split("|")[0].strip()]
     key = profiles.create(ja.CANDIDATES_DIR, clean_profile(draft), set(candidate_keys()))
-    return {"key": key, "found": imported["found"]}
+    return {"key": key, "found": imported["found"], "source": imported["source"]}
 
 
 @app.post("/api/profile/{key}/import")
 def import_cv(key: str, body: FileUpload):
-    """Fill this profile from a CV: what the CV provides replaces what was there."""
+    """Fill this profile from a returned questionnaire or a CV: what the file provides replaces
+    what was there; what it leaves empty is kept."""
     c = candidate(key)
     imported = read_upload(body)
     current, _ = profile_data(c)
     merged = cv_import.merge(current, imported["fields"])
     profiles.write(ja.CANDIDATES_DIR, key, clean_profile(merged, current))
-    return profile_view(candidate(key), imported["found"])
+    return profile_view(candidate(key), imported["found"], imported["source"])
+
+
+def pdf_response(data: bytes, filename: str) -> Response:
+    return Response(data, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"})
+
+
+@app.get("/api/questionnaire")
+def blank_questionnaire():
+    """The questionnaire, blank: to send to someone new."""
+    return pdf_response(questionnaire.build(), "Job_Search_Questionnaire.pdf")
+
+
+@app.get("/api/profile/{key}/questionnaire")
+def profile_questionnaire(key: str):
+    """The questionnaire filled in with everything the profile has so far, for the person to
+    check and complete."""
+    c = candidate(key)
+    prof, _ = profile_data(c)
+    name = re.sub(r"[^A-Za-z0-9]+", "_", prof.get("name") or c.key).strip("_") or "Profile"
+    return pdf_response(questionnaire.build(prof), f"{name}_Questionnaire.pdf")
 
 
 @app.get("/api/job-description/{key}")

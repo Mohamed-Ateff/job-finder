@@ -169,7 +169,7 @@ window.AR = {
   "Choose 24 hours, 3 days or 7 days": "اختر 24 ساعة أو 3 أيام أو 7 أيام",
 
   // people
-  "Added in the app": "أُضيف من التطبيق", "New Profile…": "ملف جديد…", "From a CV or from scratch": "من سيرة ذاتية أو من البداية",
+  "Added in the app": "أُضيف من التطبيق", "New Profile…": "ملف جديد…", "From a questionnaire or a CV": "من استبيان أو سيرة ذاتية",
   "New Profile": "ملف جديد", "Start from a CV, or just a name. Everything can be changed afterwards.":
     "ابدأ من سيرة ذاتية أو باسم فقط، ويمكن تعديل كل شيء بعد ذلك.",
   "Choose a CV": "اختر سيرة ذاتية",
@@ -189,6 +189,81 @@ window.AR = {
   "Add {list} to start searching": "أضف {list} لبدء البحث", "a name": "الاسم", "job titles": "المسميات الوظيفية", "CV details": "بيانات السيرة الذاتية",
   "Ready to search": "جاهز للبحث", "Add a headline below": "أضف عنواناً مهنياً بالأسفل", "Import CV": "استيراد سيرة ذاتية", "Preview CV": "معاينة السيرة الذاتية",
   "Filled in from the CV": "مُلئ من السيرة الذاتية",
+  "Send matches to": "أرسل الوظائف المطابقة إلى",
+  "After each search, the best matches arrive here in one email, with their CVs.": "بعد كل بحث تصل أفضل الوظائف المطابقة إلى هنا في رسالة واحدة مع سيرها الذاتية.",
+  "PDF": "PDF", "Email Me": "أرسلها لبريدي", "Sending…": "جارٍ الإرسال…", "Sent to {to}": "أُرسلت إلى {to}",
+  "Select the script and copy it by hand.": "حدّد النص وانسخه يدوياً.", "Email is ready": "البريد جاهز",
+  "Not set up yet": "لم يُعدّ بعد", "Open": "افتح", "Deploy": "النشر", "Paste the link": "الصق الرابط", "Copy": "نسخ",
+  "Save and Send Test": "حفظ وإرسال رسالة تجريبية", "Test Email Sent": "أُرسلت الرسالة التجريبية",
+  "Free: the app sends from your own Gmail through a small Google script in your account. Set it up once, in about three minutes.":
+    "مجاناً: يرسل التطبيق من بريدك في Gmail عبر نص صغير من Google في حسابك. أعدّه مرة واحدة في نحو ثلاث دقائق.",
+  "A new project opens. Delete what is in it, paste this, and press Save.": "يُفتح مشروع جديد. احذف ما فيه، والصق هذا، ثم اضغط حفظ.",
+  "Deploy → New deployment → Select type: Web app. Execute as: Me. Who has access: Anyone. Press Deploy, then Authorize access, choose your Google account, Advanced, Go to the project, Allow.":
+    "Deploy ← New deployment ← اختر النوع Web app. ثم Execute as: Me و Who has access: Anyone. اضغط Deploy ثم Authorize access، واختر حسابك، ثم Advanced، ثم Go to the project، ثم Allow.",
+  "Copy the Web app URL Google shows, paste it here with your email, and send a test.": "انسخ رابط Web app الذي يظهره Google، والصقه هنا مع بريدك، وأرسل رسالة تجريبية.",
+  "Add an email for matches in the Profile first.": "أضف بريداً للوظائف المطابقة في الملف أولاً.",
+  "Email isn't set up yet. Open Settings, then Email, and follow the three steps.": "لم يُعدّ البريد بعد. افتح الإعدادات ثم البريد الإلكتروني واتبع الخطوات الثلاث.",
+  "Free, with a Resend account: 100 emails a day. Set it up once.": "مجاناً عبر حساب في Resend: ‏100 رسالة يومياً. أعدّه مرة واحدة.",
+  "Sign up free at": "سجّل مجاناً في", "Create a key": "أنشئ مفتاحاً", "Paste it here": "الصقه هنا",
+  "Use the email you want the jobs sent to. Resend sends only to that address.": "استخدم البريد الذي تريد استلام الوظائف عليه، فـResend يرسل إليه فقط.",
+  "In Resend, open API Keys, press Create API Key, and copy it (it starts with re_).": "في Resend افتح API Keys واضغط Create API Key ثم انسخه (يبدأ بـ re_).",
+  "Paste the key with your email and send a test. Then put the same email in the Profile under Send matches to.":
+    "الصق المفتاح مع بريدك وأرسل رسالة تجريبية، ثم ضع البريد نفسه في الملف في خانة «أرسل الوظائف المطابقة إلى».",
+  "Key saved. Paste a new one to replace it": "المفتاح محفوظ. الصق مفتاحاً جديداً لاستبداله",
+  "That isn't a Resend key. It starts with re_ - copy it from resend.com, API Keys.": "هذا ليس مفتاح Resend. يبدأ المفتاح بـ re_، انسخه من resend.com ضمن API Keys.",
+  "Email isn't set up yet. Open Settings, then Email, and paste your Resend key.": "لم يُعدّ البريد بعد. افتح الإعدادات ثم البريد الإلكتروني والصق مفتاح Resend.",
+  "Website": "الموقع الشخصي", "Portfolio or personal site, on the CV.": "معرض الأعمال أو الموقع الشخصي، ويظهر في السيرة الذاتية.",
+  "For {name}: after each search, the best matches arrive in one email, each with its CV as PDF and Word.":
+    "لـ{name}: بعد كل بحث تصل أفضل الوظائف المطابقة في رسالة واحدة، مع سيرة ذاتية لكل وظيفة بصيغتي PDF وWord.",
+  "Only this person’s matches go here.": "تصل إلى هنا وظائف هذا الشخص فقط.",
+  "Free at {site}: sign up with the address above, then API Keys, Create API Key.": "مجاناً من {site}: سجّل بالبريد أعلاه، ثم API Keys ثم Create API Key.",
+  "Test email": "رسالة تجريبية", "Sends a short email to check that it arrives.": "يرسل رسالة قصيرة للتأكد من وصولها.",
+  "Add the address and the key first.": "أضف البريد والمفتاح أولاً.", "Send Test": "إرسال تجربة",
+  "Email for {name}": "البريد الإلكتروني لـ{name}", "Matches go to {email}": "تُرسل الوظائف المطابقة إلى {email}",
+  "After each search, the best matches arrive in one email, each with its CV as PDF and Word. Free with Resend (100 emails a day).":
+    "بعد كل بحث تصل أفضل الوظائف المطابقة في رسالة واحدة، مع سيرة ذاتية لكل وظيفة بصيغتي PDF وWord. مجاناً عبر Resend ‏(100 رسالة يومياً).",
+  "With the email the jobs should go to. Resend sends only to that address.": "بالبريد الذي تريد استلام الوظائف عليه، فـResend يرسل إليه فقط.",
+  "Paste both here": "الصقهما هنا", "Paste the Resend key too: step 2.": "الصق مفتاح Resend أيضاً: الخطوة 2.", "Emails Off": "أُوقفت الرسائل",
+  "Set up email for this person first: Settings, Email.": "أعدّ البريد لهذا الشخص أولاً: الإعدادات، البريد الإلكتروني.",
+  "Resend key": "مفتاح Resend", "Saved. Paste a new one to replace it": "محفوظ. الصق مفتاحاً جديداً لاستبداله",
+  "This profile sends with its own key.": "هذا الملف يرسل بمفتاحه الخاص.",
+  "Sign up free at resend.com with the email above, then paste the key from API Keys.": "سجّل مجاناً في resend.com بالبريد أعلاه، ثم الصق المفتاح من API Keys.",
+  "Upload PDF": "رفع ملف PDF", "A PDF or Word file: a CV, or a CV with its discovery record": "ملف PDF أو Word: سيرة ذاتية، أو سيرة ذاتية مع ملف الاكتشاف المهني",
+  "Upload their PDF: a CV, or a CV with its discovery record. Everything in it is used for the search.":
+    "ارفع ملف PDF الخاص به: سيرة ذاتية، أو سيرة ذاتية مع ملف الاكتشاف المهني. يُستخدم كل ما فيه للبحث.",
+  "Choose a PDF": "اختر ملف PDF", "Or a Word file. You can also drop it here.": "أو ملف Word، ويمكنك سحبه إلى هنا.",
+  "Start from their PDF, or just their name. The app then finds jobs for them and writes a CV for each one.":
+    "ابدأ بملف PDF الخاص به أو باسمه فقط. يبحث التطبيق بعدها عن وظائف له ويكتب سيرة ذاتية لكل وظيفة.",
+  "From a PDF or a name": "من ملف PDF أو اسم",
+  "Filled in from the questionnaire": "مُلئ من الاستبيان", "Filled in from the discovery record": "مُلئ من ملف الاكتشاف المهني",
+  "Filled in from the CV and the discovery record": "مُلئ من السيرة الذاتية وملف الاكتشاف المهني", "Imported": "تم الاستيراد",
+  "No name was found in the discovery record. Type the person's full name, then create the profile.":
+    "لم يُعثر على اسم في ملف الاكتشاف المهني. اكتب الاسم الكامل ثم أنشئ الملف.", "Questionnaire": "الاستبيان", "Import": "استيراد",
+  "The questionnaire, filled in with this profile, to send for checking and completing": "الاستبيان مملوءاً ببيانات هذا الملف، لإرساله للمراجعة والإكمال",
+  "A filled-in questionnaire, a CV, or a CV with its discovery record": "استبيان بعد تعبئته، أو سيرة ذاتية، أو سيرة ذاتية مع ملف الاكتشاف المهني", "Reading…": "جارٍ القراءة…",
+  "Answers Imported": "تم استيراد الإجابات",
+  "Send the questionnaire, then add the filled-in file here. A CV or just a name works too, and everything can be changed afterwards.":
+    "أرسل الاستبيان، ثم أضف المستند هنا بعد تعبئته. ويمكن البدء أيضاً بسيرة ذاتية أو باسم فقط، وتعديل كل شيء بعد ذلك.",
+  "Download the Questionnaire": "تنزيل الاستبيان", "PDF · English and Arabic": "PDF · بالعربية والإنجليزية",
+  "Choose the filled-in questionnaire": "اختر الاستبيان بعد تعبئته",
+  "Or a CV, with or without its discovery record. PDF or Word, or drop it here.":
+    "أو سيرة ذاتية، مع ملف الاكتشاف المهني أو بدونه. بصيغة PDF أو Word، أو اسحبه إلى هنا.",
+  "Optional with a file": "اختياري مع المستند", "The profile will be filled in from this file.": "ستُملأ البيانات من هذا المستند.",
+  "Choose a file or type a name.": "اختر مستنداً أو اكتب اسماً.",
+  "Nationality": "الجنسية", "e.g. Saudi": "مثلاً: سعودي",
+  "Jobs open only to other nationalities are skipped.": "تُستبعد الوظائف المخصصة لجنسيات أخرى فقط.",
+  "Your field": "مجالك", "Add an industry, speciality or tool": "أضف قطاعاً أو تخصصاً أو أداة",
+  "Jobs whose posting mentions these score higher.": "ترتفع درجة الوظيفة التي يذكر إعلانها هذه الكلمات.",
+  "Skip companies": "تجاهل الشركات", "Add a company": "أضف شركة",
+  "Work Preferences": "تفضيلات العمل", "Years of experience": "سنوات الخبرة", "e.g. 9": "مثلاً: 9",
+  "Work arrangement": "نمط العمل", "Job type": "نوع الوظيفة", "On-site": "حضوري", "Hybrid": "هجين", "Remote": "عن بُعد",
+  "Full-time": "دوام كامل", "Part-time": "دوام جزئي", "Contract": "عقد مؤقت",
+  "Relocation": "الانتقال", "e.g. Jeddah or Dubai": "مثلاً: جدة أو دبي", "Notice period": "مدة الإشعار",
+  "e.g. One month": "مثلاً: شهر واحد", "Expected salary": "الراتب المتوقع", "e.g. 30,000 SAR a month": "مثلاً: 30,000 ريال شهرياً",
+  "Residency or visa": "الإقامة أو التأشيرة", "e.g. Transferable iqama": "مثلاً: إقامة قابلة للنقل", "Anything else": "أي شيء آخر",
+  "Must-haves, deal-breakers, companies they’d love to join": "الشروط الأساسية، وما لا يقبله، والشركات التي يتمنى العمل فيها",
+  "For applying by hand, and for ChatGPT when it’s on. Never written into a CV.":
+    "للتقديم يدوياً، ولـ ChatGPT عند تشغيله. ولا تُكتب في السيرة الذاتية أبداً.",
   "{list}. Read each part, and fix anything the CV didn’t say clearly.": "{list}. راجع كل جزء، وصحّح ما لم تذكره السيرة الذاتية بوضوح.",
   "Personal Details": "البيانات الشخصية", "Headline": "العنوان المهني", "City": "المدينة", "Email": "البريد الإلكتروني", "Phone": "الهاتف", "LinkedIn": "LinkedIn",
   "First and last name": "الاسم الأول والأخير", "e.g. Senior Financial Analyst": "مثلاً: محلل مالي أول", "e.g. Riyadh": "مثلاً: الرياض",
@@ -247,6 +322,10 @@ window.AR = {
   // messages from the server
   "No name was found in the CV. Type the person's full name, then create the profile.":
     "لم يُعثر على اسم في السيرة الذاتية. اكتب الاسم الكامل ثم أنشئ الملف.",
+  "No name was found in the questionnaire. Type the person's full name, then create the profile.":
+    "لم يُعثر على اسم في الاستبيان. اكتب الاسم الكامل ثم أنشئ الملف.",
+  "This questionnaire was printed to PDF, which removes the answers. Open the one that was sent, fill it in, and use Save instead of Print.":
+    "طُبع هذا الاستبيان بصيغة PDF، وهذا يحذف الإجابات. افتح النسخة المرسلة واملأها، ثم استخدم «حفظ» بدلاً من «طباعة».",
   "Add the person's full name.": "أضف الاسم الكامل.", "The email address doesn't look right.": "يبدو أن البريد الإلكتروني غير صحيح.",
   "The LinkedIn address doesn't look right.": "يبدو أن رابط LinkedIn غير صحيح.",
   "No text was found in this file. If it's a scanned image, use the Word or text version.":
@@ -277,7 +356,8 @@ window.AR = {
   "{site} didn’t share the description. Open the posting to read it.": "لم يشارك {site} وصف الوظيفة. افتح الإعلان لقراءته.",
   "The profile and its jobs leave the app. A backup copy is kept on this computer.": "يُزال الملف ووظائفه من التطبيق، مع الاحتفاظ بنسخة احتياطية على هذا الجهاز.",
   "Add the first person": "أضف أول شخص",
-  "Start from their CV, or just their name. The app then finds jobs for them and writes a CV for each one.": "ابدأ بسيرته الذاتية أو باسمه فقط. يبحث التطبيق بعدها عن وظائف له ويكتب سيرة ذاتية لكل وظيفة.",
+  "Start from the questionnaire they fill in, their CV, or just their name. The app then finds jobs for them and writes a CV for each one.":
+    "ابدأ بالاستبيان الذي يملؤه، أو بسيرته الذاتية، أو باسمه فقط. يبحث التطبيق بعدها عن وظائف له ويكتب سيرة ذاتية لكل وظيفة.",
 };
 
 /* Arabic plural forms: [one, two, 3-10, 11+]. */

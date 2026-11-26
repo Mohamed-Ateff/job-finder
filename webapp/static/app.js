@@ -795,7 +795,9 @@ function jobDetail(j) {
       ${j.source === "demo"
         ? `<button class="btn primary" disabled title="${esc(t("Demo Mode uses sample jobs, so there is no real posting"))}">${esc(t("Sample Posting"))}</button>`
         : `<a class="btn primary" href="${esc(safeUrl(j.url))}" target="_blank" rel="noopener">${t("Apply on {site}", { site: bd(site) })} ${icon("external", 12, "flip", 2.2)}</a>`}
-      ${cvHref ? `<a class="btn" href="${cvHref}" download>${icon("download", 14, "", 1.9)} ${esc(t("Download CV"))}</a>` : ""}
+      ${cvHref ? `<a class="btn" href="${cvHref}" download>${icon("download", 14, "", 1.9)} ${esc(t("Download CV"))}</a>
+        <a class="btn" href="${cvHref}&format=pdf" download>${esc(t("PDF"))}</a>` : ""}
+      ${j.source === "demo" ? "" : `<button class="btn" data-action="email-job" data-url="${esc(j.url)}">${icon("envelope", 14, "", 1.8)} ${esc(t("Email Me"))}</button>`}
       <span class="d-icons">
         <button class="icon-btn applied-btn${j.applied ? " on" : ""}" data-applied="${esc(j.url)}" aria-pressed="${Boolean(j.applied)}"
           title="${esc(appliedLabel)}" aria-label="${esc(appliedLabel)}">${j.applied ? icon("checkCircle", 18) : icon("check", 16, "", 2.2)}</button>
@@ -828,13 +830,78 @@ function settingsHtml() {
   const periods = s.search_periods.map((h) => [String(h), esc(t(PERIODS[h] || `${h} h`))]);
   return `<div class="doc settings"><div class="doc-main">
     <header class="doc-head"><h1>${esc(t("Settings"))}</h1></header>
-    <section class="psec" id="p-general"><h2>${esc(t("General"))}</h2><div class="props">
-      ${prop("Appearance", appearancePick())}
-      ${prop("Language", langPick())}
-      ${prop("Look back", seg("hours", periods, String(s.search_hours), "hours"))}
+    <section class="psec" id="p-general"><h2>${esc(t("General"))}</h2><div class="group">
+      ${row("Appearance", "", appearancePick())}
+      ${row("Language", "", langPick())}
+      ${row("Look back", "How far back each search reads new postings.", seg("hours", periods, String(s.search_hours), "hours"))}
     </div></section>
+    ${mailHtml()}
     ${s.groups.map(setupGroup).join("")}
   </div></div>`;
+}
+
+/* Email for the person selected: where their matches go and the free Resend key that sends them.
+   Each person's emails go only to their own address. */
+let mailLoading = false;
+async function loadMail() {
+  if (mailLoading) return;
+  mailLoading = true;
+  const key = S.key;
+  try { S.mail = await api(`/api/profile/${enc(key)}/email`); } catch (err) { if (err.message !== "auth") banner(err.message); }
+  mailLoading = false;
+  const el = $("#p-mail");
+  if (el && S.mail?.key === S.key) el.outerHTML = mailHtml();
+}
+/* One settings row: what it is on the left, its control on the right. */
+const row = (title, sub, control) => `<div class="item-wrap"><div class="item"><span class="item-main"><span class="item-title">${esc(t(title))}</span>${
+  sub ? `<span class="item-sub">${esc(t(sub))}</span>` : ""}</span><span class="item-control">${control}</span></div></div>`;
+
+/* An editable row (like the key rows below it): the value on the right; click to change it in place. */
+function mailRow(field, title, sub, value, ok, form) {
+  const open = S.mailOpen === field;
+  return `<div class="item-wrap"><button class="item" data-action="mail-edit" data-field="${field}" aria-expanded="${open}">
+      <span class="item-main"><span class="item-title">${esc(t(title))}</span><span class="item-sub">${sub}</span></span>
+      <span class="item-value"><span>${value}</span>${ok ? icon("checkCircle", 15, "good") : ""}</span>${icon("chevR", 12, "chev flip", 2)}</button>
+    ${open ? `<div class="item-edit">${form}</div>` : ""}</div>`;
+}
+
+function mailHtml() {
+  const m = S.mail;
+  if (!m || m.key !== S.key) { setTimeout(loadMail); return `<section class="psec" id="p-mail"><h2>${esc(t("Email"))}</h2></section>`; }
+  const ready = Boolean(m.email && m.has_key);
+  const save = `<button class="btn" type="button" data-action="mail-cancel">${esc(t("Cancel"))}</button><button class="btn primary" type="submit">${esc(t("Save"))}</button>`;
+  return `<section class="psec" id="p-mail"><h2>${esc(t("Email"))}</h2>
+    <p class="psec-note">${t("For {name}: after each search, the best matches arrive in one email, each with its CV as PDF and Word.", { name: `<bdi>${esc(m.name)}</bdi>` })}</p>
+    <div class="group">
+      ${mailRow("email", "Send matches to", esc(t("Only this person’s matches go here.")),
+        m.email ? `<bdi>${esc(m.email)}</bdi>` : esc(t("Not added")), Boolean(m.email),
+        `<form data-mail-email><input class="field" name="email" type="email" value="${esc(m.email)}" placeholder="you@gmail.com" dir="ltr" autocomplete="email">${save}</form>`)}
+      ${mailRow("key", "Resend key", t("Free at {site}: sign up with the address above, then API Keys, Create API Key.",
+          { site: `<a href="https://resend.com/signup" target="_blank" rel="noopener">resend.com</a>` }),
+        esc(t(m.has_key ? "Saved" : "Not added")), m.has_key,
+        `<form data-mail-key><input class="field" name="key" type="password" placeholder="re_…" dir="ltr" autocomplete="off">${save}</form>`)}
+      ${row("Test email", ready ? "Sends a short email to check that it arrives." : "Add the address and the key first.",
+        `<button class="btn" type="button" data-action="mail-test" ${ready ? "" : "disabled"}>${esc(t("Send Test"))}</button>`)}
+    </div>
+    <p class="field-error" id="mail-error" dir="auto" hidden></p></section>`;
+}
+
+async function saveMail(body, done) {
+  const err = $("#mail-error");
+  if (err) err.hidden = true;
+  try {
+    S.mail = await api(`/api/profile/${enc(S.key)}/email`, { method: "POST", body: { email: S.mail.email, key: "", test: false, ...body } });
+    const cache = S.cache[S.key];
+    if (cache) delete cache.profile;
+    S.mailOpen = null;
+    $("#p-mail").outerHTML = mailHtml();
+    hud(done, "check");
+  } catch (e2) {
+    if (e2.message === "auth") return;
+    $("#p-mail").outerHTML = mailHtml();             // the button is usable again; the reason shows under the rows
+    const el = $("#mail-error");
+    if (el) { el.textContent = t(e2.message); el.hidden = false; }
+  }
 }
 
 /* Setup rows arrive in English from the server; in Arabic, use their translation (by row id). */
@@ -888,9 +955,13 @@ function setupItem(i) {
 const LEVEL_LABEL = { entry: "Entry level", associate: "Associate", "mid-senior": "Mid–Senior", director: "Director", executive: "Executive" };
 const FOUND_LABEL = {
   name: "Name", headline: "Headline", email: "Email", phone: "Phone", linkedin: "LinkedIn", city: "City", titles: "Job titles",
+  nationality: "Nationality", keywords: "Your field", exclude: "Skip titles with", exclude_companies: "Skip companies",
+  preferences: "Work Preferences",
   summary: "Summary", achievements: "Key Achievements", experience: "Experience", skills: "Skills", education: "Education",
   certifications: "Certifications", languages: "Languages", training: "Training", awards: "Awards",
 };
+const MODE_LABEL = { "on-site": "On-site", hybrid: "Hybrid", remote: "Remote" };
+const TYPE_LABEL = { "full-time": "Full-time", "part-time": "Part-time", contract: "Contract" };
 
 function formFor() {
   const v = C().profile;
@@ -924,7 +995,8 @@ const tokenEditor = (path, values, placeholder) =>
   `<div class="tokens edit" data-tokens="${path}">${values.map((v, i) => `<span class="token" dir="auto">${esc(v)}<button type="button" class="token-x"
     data-token-remove="${path}" data-i="${i}" aria-label="${esc(t("Remove {x}", { x: v }))}">${icon("close", 8, "", 2.4)}</button></span>`).join("")}
     <input class="token-input" data-token-add="${path}" dir="auto" placeholder="${esc(t(placeholder))}" enterkeyhint="done" autocomplete="off"></div>`;
-const chips = (path, options, selected) => `<div class="chips">${options.map(([v, label]) =>
+// optional: every chip can be turned off (a preference); otherwise one always stays chosen.
+const chips = (path, options, selected, optional = false) => `<div class="chips"${optional ? " data-optional" : ""}>${options.map(([v, label]) =>
   `<button type="button" class="chip" data-chip="${path}" data-value="${esc(v)}" aria-pressed="${selected.includes(v)}">${esc(label)}</button>`).join("")}</div>`;
 const needTag = (key, missing) => `<span class="need" data-need="${key}"${missing.includes(key) ? "" : " hidden"}>${esc(t("Needed"))}</span>`;
 const psec = (id, title, body, note = "") => `<section class="psec" id="p-${id}"><h2>${esc(title)}</h2>${note ? `<p class="psec-note">${note}</p>` : ""}${body}</section>`;
@@ -963,7 +1035,7 @@ function profileHead(v, f) {
         <div class="doc-head-text"><h1 dir="auto">${esc(name)}</h1>
           <p class="doc-sub">${line || `<span class="muted">${esc(t("Add a headline"))}</span>`}</p>${status}</div>
         <div class="doc-actions">
-          <label class="btn">${icon("upload", 14, "", 1.9)}<span>${esc(t("Import CV"))}</span><input type="file" data-import accept=".pdf,.docx,.txt" hidden></label>
+          <label class="btn" title="${esc(t("A PDF or Word file: a CV, or a CV with its discovery record"))}">${icon("upload", 14, "", 1.9)}<span>${esc(t("Upload PDF"))}</span><input type="file" data-import accept=".pdf,.docx,.txt" hidden></label>
           <a class="btn" href="/api/profile/${enc(v.key)}/cv" download>${icon("download", 14, "", 1.9)}<span>${esc(t("Preview CV"))}</span></a>
           <button type="button" class="btn danger" data-action="clear-jobs">${icon("trash", 14, "", 1.8)}<span>${esc(t("Clear Jobs"))}</span></button>
         </div>
@@ -975,7 +1047,9 @@ function profileHead(v, f) {
 function importNotice() {
   if (S.imported?.key !== S.key || !S.imported.found.length) return "";
   const parts = S.imported.found.map((k) => t(FOUND_LABEL[k] || k)).join(isAr() ? "، " : ", ");
-  return `<div class="notice"><div class="notice-text"><b>${esc(t("Filled in from the CV"))}</b>
+  const from = { questionnaire: "Filled in from the questionnaire", record: "Filled in from the discovery record",
+    "cv+record": "Filled in from the CV and the discovery record" }[S.imported.source] || "Filled in from the CV";
+  return `<div class="notice"><div class="notice-text"><b>${esc(t(from))}</b>
       <p>${esc(parts)}</p></div>
     <button class="icon-btn" data-action="dismiss-import" aria-label="${esc(t("Dismiss"))}">${icon("close", 12, "", 2)}</button></div>`;
 }
@@ -988,7 +1062,9 @@ const PROFILE_SECTIONS = {
       ${prop("Email", edit("email", f.email, { type: "email", dir: "ltr", placeholder: "name@example.com" }))}
       ${prop("Phone", edit("phone", f.phone, { type: "tel", dir: "ltr", placeholder: "+966 5x xxx xxxx" }))}
       ${prop("City", edit("city", f.city, { placeholder: "e.g. Riyadh" }))}
+      ${prop("Nationality", edit("nationality", f.nationality, { placeholder: "e.g. Saudi" }), { help: "Jobs open only to other nationalities are skipped." })}
       ${prop("LinkedIn", edit("linkedin", f.linkedin, { dir: "ltr", placeholder: "linkedin.com/in/…" }))}
+      ${prop("Website", edit("website", f.website || "", { dir: "ltr", placeholder: "yourname.dev" }), { help: "Portfolio or personal site, on the CV." })}
     </div>`),
   search: (v, f) => {
     const s = f.search, opt = v.options;
@@ -998,8 +1074,24 @@ const PROFILE_SECTIONS = {
         `<option value="${esc(c)}" ${c === s.country ? "selected" : ""}>${esc(t(c))}</option>`).join("")}</select>`)}
       ${prop("Seniority", chips("search.levels", opt.levels.map((l) => [l, t(LEVEL_LABEL[l] || l)]), s.levels))}
       ${prop("Job sites", chips("search.sites", opt.sites.map((x) => [x.key, x.label]), s.sites))}
+      ${prop("Your field", tokenEditor("search.keywords", s.keywords, "Add an industry, speciality or tool"),
+        { top: true, help: "Jobs whose posting mentions these score higher." })}
       ${prop("Skip titles with", tokenEditor("search.exclude", s.exclude, "Add a word, e.g. Sales"), { top: true })}
+      ${prop("Skip companies", tokenEditor("search.exclude_companies", s.exclude_companies, "Add a company"), { top: true })}
     </div>`);
+  },
+  prefs: (v, f) => {
+    const p = f.preferences, opt = v.options;
+    return psec("prefs", t("Work Preferences"), `<div class="props">
+      ${prop("Years of experience", edit("preferences.years", p.years, { placeholder: "e.g. 9" }))}
+      ${prop("Work arrangement", chips("preferences.work_modes", opt.work_modes.map((m) => [m, t(MODE_LABEL[m] || m)]), p.work_modes, true))}
+      ${prop("Job type", chips("preferences.job_types", opt.job_types.map((x) => [x, t(TYPE_LABEL[x] || x)]), p.job_types, true))}
+      ${prop("Relocation", area("preferences.relocate", p.relocate, "e.g. Jeddah or Dubai", "text", 1))}
+      ${prop("Notice period", edit("preferences.notice", p.notice, { placeholder: "e.g. One month" }))}
+      ${prop("Expected salary", edit("preferences.salary", p.salary, { placeholder: "e.g. 30,000 SAR a month" }))}
+      ${prop("Residency or visa", edit("preferences.visa", p.visa, { placeholder: "e.g. Transferable iqama" }))}
+      ${prop("Anything else", area("preferences.other", p.other, "Must-haves, deal-breakers, companies they’d love to join", "text", 2), { top: true })}
+    </div>`, esc(t("For applying by hand, and for ChatGPT when it’s on. Never written into a CV.")));
   },
   summary: (v, f) => psec("summary", t("Summary"), area("cv.summary", f.cv.summary,
     "Two or three sentences on experience and strengths. A blank line starts a new paragraph.", "paras", 4)),
@@ -1016,14 +1108,15 @@ const PROFILE_SECTIONS = {
   notes: (v, f) => psec("notes", t("Notes for ChatGPT"), area("notes", f.notes, "e.g. Egyptian, living in Riyadh. Won’t relocate. Available in one month.", "text", 2)),
 };
 const profileSection = (id, v, f) => PROFILE_SECTIONS[id](v, f);
-const SECTION_OF = (path) => (path.startsWith("search.") ? "search" : { "cv.skills": "skills", "cv.experience": "experience", "cv.education": "education" }[path]);
+const SECTION_OF = (path) => (path.startsWith("search.") ? "search" : path.startsWith("preferences.") ? "prefs"
+  : { "cv.skills": "skills", "cv.experience": "experience", "cv.education": "education" }[path]);
 
 function profileHtml() {
   const v = C().profile, f = formFor();
   const groupTitleOf = (g) => (isAr() && window.AR_SETUP.groups[g.id] ? window.AR_SETUP.groups[g.id].replace("{name}", first()) : g.title);
   // Only what the client uses. Notes are read by ChatGPT alone, so they show only when it is on.
   const ai = Boolean(v.chatgpt);
-  const toc = [["personal", "Personal Details"], ["search", "Job Search"], ["summary", "Summary"], ["achievements", "Key Achievements"],
+  const toc = [["personal", "Personal Details"], ["search", "Job Search"], ["prefs", "Work Preferences"], ["summary", "Summary"], ["achievements", "Key Achievements"],
     ["experience", "Experience"], ["skills", "Skills"], ["education", "Education"], ["more", "More for the CV"],
     ...(ai ? [["notes", "Notes for ChatGPT"]] : []),
     ...v.groups.map((g) => [g.id, groupTitleOf(g), true])];
@@ -1083,7 +1176,7 @@ function openAccountMenu(anchor) {
       <span class="account-text"><span class="account-name" dir="auto">${esc(c.name)}</span><span class="account-sub" dir="auto">${esc(c.kind === "simple" ? t("Added in the app") : c.system_label)}</span></span>
       <span class="tick">${c.key === S.key ? icon("check", 14, "", 2.2) : ""}</span></button>`).join("")
     + `<div class="menu-sep"></div><button role="menuitem" data-action="new-profile"><span class="avatar add">${icon("plus", 14, "", 2.2)}</span>
-      <span class="account-text"><span class="account-name">${esc(t("New Profile…"))}</span><span class="account-sub">${esc(t("From a CV or from scratch"))}</span></span></button>`;
+      <span class="account-text"><span class="account-name">${esc(t("New Profile…"))}</span><span class="account-sub">${esc(t("From a PDF or a name"))}</span></span></button>`;
   document.body.append(menu);
   placeBelow(menu, anchor, "start");
 }
@@ -1457,10 +1550,10 @@ function scheduleSave(delay = 500) {
 function flushSave() {
   clearTimeout(saveTimer);
   saveTimer = null;
-  if (!pendingSave) return;
+  if (!pendingSave) return Promise.resolve();
   const { key, form } = pendingSave;
   pendingSave = null;
-  saveProfile(key, form);
+  return saveProfile(key, form);
 }
 async function saveProfile(key, form) {
   try {
@@ -1541,33 +1634,35 @@ async function fileBody(file) {
 async function importCv(file) {
   const key = S.key;
   flushSave();
-  const btn = $(".head-actions label.btn");
-  if (btn) { btn.classList.add("busy"); btn.querySelector("span").textContent = t("Reading the CV…"); }
+  const btn = $(".doc-actions label.btn");
+  if (btn) { btn.classList.add("busy"); btn.querySelector("span").textContent = t("Reading…"); }
   try {
     const v = await api(`/api/profile/${enc(key)}/import`, { method: "POST", body: await fileBody(file) });
     const cache = S.cache[key] ||= {};
     cache.profile = v;
     delete cache.summary;
-    S.imported = { key, found: v.found };
+    S.imported = { key, found: v.found, source: v.source };
     const person = S.candidates.find((p) => p.key === key);
     if (person) { person.name = v.profile.name; person.initials = initialsOf(v.profile.name); }
-    if (key === S.key) { await render({ quiet: true }); hud("CV Imported", "check"); }
+    if (key === S.key) { await render({ quiet: true }); hud(v.source === "questionnaire" ? "Answers Imported" : v.source === "cv" ? "CV Imported" : "Imported", "check"); }
   } catch (err) {
     if (err.message !== "auth") banner(err.message);
-    if (btn) { btn.classList.remove("busy"); btn.querySelector("span").textContent = t("Import CV"); }
+    if (btn) { btn.classList.remove("busy"); btn.querySelector("span").textContent = t("Upload PDF"); }
   }
 }
 
+/* A new person starts from the questionnaire: send it, then add the filled-in file here. A CV, or
+   just a name, still works. */
 function openNewProfile() {
   closeFloating();
   S.newFile = null;
   openSheet(`<div class="sheet-body"><h2>${esc(t("New Profile"))}</h2>
-      <p class="lede" style="min-height:0">${esc(t("Start from a CV, or just a name. Everything can be changed afterwards."))}</p>
-      <label class="drop" id="drop">${icon("doc", 28, "", 1.4)}<span class="drop-text"><b id="drop-name">${esc(t("Choose a CV"))}</b>
-        <small id="drop-sub">${esc(t("PDF or Word, or drop it here."))}</small></span>
+      <p class="lede" style="min-height:0">${esc(t("Upload their PDF: a CV, or a CV with its discovery record. Everything in it is used for the search."))}</p>
+      <label class="drop" id="drop">${icon("doc", 28, "", 1.4)}<span class="drop-text"><b id="drop-name">${esc(t("Choose a PDF"))}</b>
+        <small id="drop-sub">${esc(t("Or a Word file. You can also drop it here."))}</small></span>
         <input type="file" data-new-file accept=".pdf,.docx,.txt" hidden></label>
       <div class="group"><label class="item field-row"><span class="item-title">${esc(t("Full name"))}</span>
-        <input class="inline" id="new-name" dir="auto" placeholder="${esc(t("Optional with a CV"))}" autocomplete="off"></label></div>
+        <input class="inline" id="new-name" dir="auto" placeholder="${esc(t("Optional with a file"))}" autocomplete="off"></label></div>
       <p class="field-error" id="new-error" dir="auto" hidden></p></div>
     <div class="sheet-foot"><button class="btn" data-action="close-sheet">${esc(t("Cancel"))}</button>
       <button class="btn primary" data-action="create-profile">${esc(t("Create Profile"))}</button></div>`);
@@ -1578,15 +1673,15 @@ function pickNewFile(file) {
   S.newFile = file;
   $("#drop")?.classList.add("has-file");
   $("#drop-name").textContent = file.name;
-  $("#drop-sub").textContent = t("The profile will be filled in from this CV.");
+  $("#drop-sub").textContent = t("The profile will be filled in from this file.");
 }
 async function createProfile() {
   const btn = $('[data-action="create-profile"]');
   const name = ($("#new-name")?.value || "").trim();
   const error = (msg) => { const el = $("#new-error"); el.textContent = msg; el.hidden = false; };
-  if (!name && !S.newFile) return error(t("Choose a CV or type a name."));
+  if (!name && !S.newFile) return error(t("Choose a file or type a name."));
   btn.disabled = true;
-  btn.innerHTML = `<span class="spin"></span>${esc(t(S.newFile ? "Reading the CV…" : "Creating…"))}`;
+  btn.innerHTML = `<span class="spin"></span>${esc(t(S.newFile ? "Reading…" : "Creating…"))}`;
   try {
     const body = { name };
     if (S.newFile) body.file = await fileBody(S.newFile);
@@ -1595,7 +1690,7 @@ async function createProfile() {
     S.key = r.key;
     store.set("candidate", S.key);
     S.cache[S.key] = {};
-    S.imported = { key: r.key, found: r.found };
+    S.imported = { key: r.key, found: r.found, source: r.source };
     S.query = ""; S.filter = "matches"; S.expanded = null; S.detailOpen = false;
     closeSheet();
     if (!$("#window")) renderShell();               // the first profile: the app's own screens appear now
@@ -1670,6 +1765,38 @@ document.addEventListener("click", async (e) => {
     el.closest("[data-action]").remove();
     return;
   }
+  if (action === "mail-edit") {
+    const field = el.closest("[data-field]").dataset.field;
+    S.mailOpen = S.mailOpen === field ? null : field;
+    $("#p-mail").outerHTML = mailHtml();
+    if (S.mailOpen) $(`#p-mail .item-edit input`)?.focus();
+    return;
+  }
+  if (action === "mail-cancel") { S.mailOpen = null; $("#p-mail").outerHTML = mailHtml(); return; }
+  if (action === "mail-test") {
+    const btn = el.closest("button");
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spin"></span> ${esc(t("Sending…"))}`;
+    await saveMail({ test: true }, "Test Email Sent");
+    return;
+  }
+  if (action === "copy-script") {
+    try { await navigator.clipboard.writeText(S.mail?.script || ""); hud("Copied", "check"); } catch { banner(t("Select the script and copy it by hand.")); }
+    return;
+  }
+  if (action === "email-job") {
+    const btn = el.closest("button");
+    btn.disabled = true;
+    const label = btn.innerHTML;
+    btn.innerHTML = `<span class="spin"></span> ${esc(t("Sending…"))}`;
+    try {
+      const r = await api("/api/email-job", { method: "POST", body: { candidate: S.key, url: btn.dataset.url } });
+      hud(t("Sent to {to}", { to: r.to }), "check");
+    } catch (err) { if (err.message !== "auth") banner(t(err.message)); }
+    btn.disabled = false;
+    btn.innerHTML = label;
+    return;
+  }
   if (action === "delete-profile") return confirmDelete();
   if (action === "delete-profile-yes") return deleteProfile();
   if (action === "dismiss-import") { S.imported = null; return el.closest(".notice")?.remove(); }
@@ -1726,7 +1853,7 @@ document.addEventListener("click", async (e) => {
   const chip = el.closest("[data-chip]");
   if (chip) {
     const path = chip.dataset.chip, list = getPath(S.form, path), value = chip.dataset.value, i = list.indexOf(value);
-    if (i >= 0 && list.length === 1) return;                  // at least one stays chosen
+    if (i >= 0 && list.length === 1 && !chip.closest("[data-optional]")) return;   // at least one stays chosen
     return editForm(() => (i >= 0 ? list.splice(i, 1) : list.push(value)), null, path);
   }
   const add = el.closest("[data-add]");
@@ -1937,6 +2064,15 @@ document.addEventListener("submit", async (e) => {
       return;
     }
   }
+  if (form.matches("[data-mail-email]")) {
+    const email = form.email.value.trim();
+    return saveMail({ email }, email ? "Saved" : "Emails Off");
+  }
+  if (form.matches("[data-mail-key]")) {
+    const key = form.key.value.trim();
+    if (!key) return form.key.focus();
+    return saveMail({ key }, "Saved");
+  }
   if (form.matches("[data-env-form]")) {
     const value = form.value.value.trim();
     if (!value) return form.value.focus();
@@ -1981,7 +2117,7 @@ function autoGrow(area) {
 document.addEventListener("focusout", (e) => {
   if (e.target.dataset?.tokenAdd !== undefined && e.target.value.trim()) addToken(e.target);
 });
-/* A CV dropped on the New Profile sheet. */
+/* A questionnaire or CV dropped on the New Profile sheet. */
 document.addEventListener("dragover", (e) => {
   const drop = e.target.closest?.("#drop");
   if (!drop) return;
@@ -2056,7 +2192,7 @@ function showNoProfiles() {
   $("#root").innerHTML = `<div class="login"><div class="login-box first-run">
       <span class="app-icon" style="width:72px;height:72px">${icon("briefcase", 32, "", 1.6)}</span>
       <h1>${esc(t("Add the first person"))}</h1>
-      <p>${esc(t("Start from their CV, or just their name. The app then finds jobs for them and writes a CV for each one."))}</p>
+      <p>${esc(t("Start from their PDF, or just their name. The app then finds jobs for them and writes a CV for each one."))}</p>
       <button class="btn primary large" data-action="new-profile">${icon("plus", 14, "", 2.3)} ${esc(t("New Profile"))}</button></div></div>`;
 }
 

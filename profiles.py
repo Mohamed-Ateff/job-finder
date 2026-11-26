@@ -27,11 +27,17 @@ LEVELS = ["entry", "associate", "mid-senior", "director", "executive"]
 EARLY_LEVELS = {"entry", "associate"}
 COUNTRIES = ["Saudi Arabia", "United Arab Emirates", "Qatar", "Kuwait", "Bahrain", "Oman", "Egypt"]
 SITES = ["linkedin", "indeed", "bayt"]
+WORK_MODES = ["on-site", "hybrid", "remote"]
+JOB_TYPES = ["full-time", "part-time", "contract"]
+# How the person wants to work (mostly from the questionnaire): shown in the app and read by
+# ChatGPT, never written into a CV.
+PREFERENCE_TEXT = {"years": 20, "relocate": 160, "notice": 160, "salary": 160, "visa": 160}
 KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
 # Limits keep a profile a profile (and a pasted book out of every prompt).
 SHORT, LONG, ITEMS = 160, 2000, 60
 CV_LISTS = ("achievements", "skills", "certifications", "languages", "training", "awards")
+GROUPS = ("search", "cv", "preferences")         # the parts of a profile that are dicts of their own
 
 # Words that say nothing about the field: "manager" alone would let every manager job through.
 GENERIC_TITLE_WORDS = {
@@ -48,11 +54,16 @@ def blank(name: str = "") -> dict:
         "version": 1,
         "name": name,
         "headline": "",
-        "email": "", "phone": "", "linkedin": "", "city": "",
+        "email": "", "phone": "", "linkedin": "", "website": "", "city": "", "nationality": "",
+        "notify_email": "",                 # where the best matches of each search are emailed, with their CVs
+        # keywords: words that show a posting is in the person's field (free scoring looks for them);
+        # exclude_companies: employers whose jobs are dropped before scoring.
         "search": {"titles": [], "country": "Saudi Arabia", "levels": ["mid-senior"],
-                   "sites": ["linkedin", "indeed"], "exclude": []},
+                   "sites": ["linkedin", "indeed"], "exclude": [], "keywords": [], "exclude_companies": []},
         "cv": {"summary": [], "achievements": [], "experience": [], "skills": [], "education": [],
                "certifications": [], "languages": [], "training": [], "awards": []},
+        "preferences": {"years": "", "work_modes": [], "job_types": [], "relocate": "", "notice": "",
+                        "salary": "", "visa": "", "other": ""},
         "notes": "",
         "former_names": [],
     }
@@ -101,6 +112,15 @@ def clean(data: dict, *, base: dict | None = None) -> dict:
     if linkedin and re.search(r"[<>\"'\s]|javascript:", linkedin, re.I):
         raise ValueError("The LinkedIn address doesn't look right.")
     out["linkedin"] = re.sub(r"^https?://(www\.)?", "", linkedin)
+    website = _text(data.get("website"))
+    if website and re.search(r"[<>\"'\s]|javascript:", website, re.I):
+        raise ValueError("The website address doesn't look right.")
+    out["website"] = re.sub(r"^https?://(www\.)?", "", website).rstrip("/")
+    out["nationality"] = _text(data.get("nationality"), 60)
+    notify = _text(data.get("notify_email"))
+    if notify and not all(re.fullmatch(r"[^@\s,]+@[^@\s,]+\.[^@\s,]+", a.strip()) for a in notify.split(",")):
+        raise ValueError("The email for matches doesn't look right.")
+    out["notify_email"] = ", ".join(a.strip() for a in notify.split(",") if a.strip())
 
     search = data.get("search") or {}
     out["search"]["titles"] = _items(search.get("titles"), 80, 24)
@@ -113,6 +133,16 @@ def clean(data: dict, *, base: dict | None = None) -> dict:
     sites = [s for s in SITES if s in (search.get("sites") or [])]
     out["search"]["sites"] = sites or ["linkedin"]
     out["search"]["exclude"] = _items(search.get("exclude"), 40, 30)
+    out["search"]["keywords"] = _items(search.get("keywords"), 60, 30)
+    out["search"]["exclude_companies"] = _items(search.get("exclude_companies"), 80, 30)
+
+    prefs = data.get("preferences") or {}
+    for key, limit in PREFERENCE_TEXT.items():
+        out["preferences"][key] = _text(prefs.get(key), limit)
+    for key, allowed in (("work_modes", WORK_MODES), ("job_types", JOB_TYPES)):
+        chosen = prefs.get(key) if isinstance(prefs.get(key), list) else []
+        out["preferences"][key] = [x for x in allowed if x in chosen]
+    out["preferences"]["other"] = _para(prefs.get("other"), LONG)
 
     cv = data.get("cv") or {}
     summary = cv.get("summary") or []
@@ -158,9 +188,9 @@ def read(base: Path, key: str) -> dict | None:
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return None
     merged = blank()
-    merged.update({k: v for k, v in data.items() if k not in ("search", "cv")})
-    merged["search"].update(data.get("search") or {})
-    merged["cv"].update(data.get("cv") or {})
+    merged.update({k: v for k, v in data.items() if k not in GROUPS})
+    for group in GROUPS:
+        merged[group].update(data.get(group) or {})
     return merged
 
 
@@ -257,39 +287,93 @@ def location(profile: dict) -> str:
     return ", ".join(p for p in (profile.get("city"), profile["search"]["country"]) if p)
 
 
+# What must never print on a CV: contact details read as a job, a date or a job title read as a skill.
+CONTACT_RE = re.compile(r"[✉☎⚲📞📧🔗📍☏✆]|@[\w-]+\.\w|(?:\+|00)\d[\d \-]{7,}\d|https?://|www\.|linkedin", re.I)
+DATE_RE = re.compile(r"\b(?:19|20)\d\d\b.*(?:–|-|to|present)|^(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{4}", re.I)
+
+
+def clean_skill(skill: str) -> bool:
+    """A skill worth printing: not a date, contact detail, sentence fragment or stray word."""
+    s = skill.strip()
+    if not s or CONTACT_RE.search(s) or DATE_RE.search(s):
+        return False
+    if ":" in s:                                 # a group: "Frameworks & Libraries: React, Next.js"
+        return True
+    words = s.split()
+    if len(words) > 6 or s.endswith((" and", " or", " the", ",")):
+        return False
+    if re.search(r"\b(?:Co|Inc|Ltd|LLC|Corp|Group|Company)\.?$", s) or \
+            re.search(r"\b(?:Developer|Engineer|Manager|Director|Designer|Analyst|Consultant|Officer|Specialist)$", s):
+        return False                             # a company or a job title read as a skill
+    return not (s[0].islower() and len(words) == 1 and not re.search(r"[A-Z0-9.+#]", s))   # "integrations"
+
+
+def skill_terms(skills: list[str]) -> list[str]:
+    """Grouped skills as single terms: "Styling & UI: Tailwind CSS, Sass" -> Tailwind CSS, Sass."""
+    out = []
+    for s in skills:
+        body = s.split(":", 1)[1] if ":" in s else s
+        out += [p.strip(" .") for p in re.split(r",(?![^()]*\))", body) if p.strip(" .")] if ":" in s else [s]
+    return list(dict.fromkeys(out))
+
+
+BRANDS = ("WordPress", "JavaScript", "TypeScript", "GitHub", "GitLab", "LinkedIn", "HubSpot", "WooCommerce",
+          "Next.js", "Node.js", "React.js", "Vue.js", "PostgreSQL", "MySQL", "MongoDB", "jQuery", "Tailwind CSS",
+          "PowerPoint", "YouTrack", "SharePoint", "Salesforce", "Shopify", "Figma", "Power BI", "iOS", "macOS")
+_BRAND_RE = re.compile(r"(?<![\w.])(" + "|".join(re.escape(b) for b in BRANDS) + r")(?![\w])", re.I)
+
+
+def brand_case(text: str) -> str:
+    """'Wordpress' -> 'WordPress', 'Javascript' -> 'JavaScript': tech names spelled as their makers do."""
+    canon = {b.lower(): b for b in BRANDS}
+    return _BRAND_RE.sub(lambda m: canon[m.group(1).lower()], text) if text else text
+
+
+def _language(item: str) -> str:
+    return item[:1].upper() + item[1:] if item else item
+
+
 def cv_content(profile: dict) -> dict:
-    """The standard CV (free mode's CV, headed per job): the same shape as demo.json's 'cv'."""
+    """The standard CV (free mode's CV, the same for every job but its skills order): the same shape as
+    demo.json's 'cv'. Anything that isn't CV material (a role made of contact details, a date as a
+    skill) is left out, so a badly read file can't put it on a CV."""
     cv = profile["cv"]
-    skills = cv["skills"]
+    b = brand_case
+    skills = [s for s in (b(x) for x in cv["skills"]) if clean_skill(s)]
+    experience = [e for e in cv["experience"]
+                  if not CONTACT_RE.search(f"{e['role_title']} {e['company']}") and (e["role_title"] or e["company"])]
     return {
-        "pillar": profile.get("headline") or " | ".join(skills[:2]) or (profile["search"]["titles"] or [""])[0],
-        "about": cv["summary"],
+        "pillar": b(profile.get("headline") or (profile["search"]["titles"] or [""])[0]),
+        "about": [b(p) for p in cv["summary"]],
         "achievements_title": "Key Achievements:",
-        "achievements": cv["achievements"],
-        "experience": [{"company": e["company"], "period": e["period"], "role_title": e["role_title"],
-                        "role_description": e["role_description"], "bullets": e["bullets"]}
-                       for e in cv["experience"]],
+        "achievements": [b(a) for a in cv["achievements"]],
+        "experience": [{"company": e["company"], "period": e["period"], "role_title": b(e["role_title"]),
+                        "role_description": b(e["role_description"]),
+                        "bullets": [b(x) for x in e["bullets"] if not CONTACT_RE.search(x)]}
+                       for e in experience],
         "competencies": " | ".join(skills[:8]),
-        "skills": list(skills),                 # all of them: the CV for a job leads with the ones it asks for
+        "skills": skills,                       # all of them: the CV for a job leads with the ones it asks for
     }
 
 
 def cv_fixed(profile: dict) -> dict:
     """Contact details and the fixed sections of every CV (the same shape as cv_profile.json)."""
     cv = profile["cv"]
-    senior = set(profile["search"]["levels"]) & {"director", "executive"}
+    # "Executive Profile" only for someone looking for executive roles alone; everyone else gets a summary.
+    executive = set(profile["search"]["levels"]) <= {"director", "executive"}
     return {
         "name": profile.get("name", ""),
-        "profile_heading": "Executive Profile" if senior else "Professional Profile",
+        "profile_heading": "Executive Profile" if executive else "Professional Summary",
         "location": location(profile),
         "phone": profile.get("phone", ""),
         "email": profile.get("email", ""),
         "linkedin": profile.get("linkedin", ""),
+        "website": profile.get("website", ""),
         "education": cv["education"],
-        "certifications": cv["certifications"],
+        "certifications": [re.sub(r"\s+:\s*", ": ", brand_case(x)) for x in cv["certifications"]],
         "training": cv["training"],
         "awards": cv["awards"],
-        "languages": cv["languages"],
+        "languages": [_language(x) for x in cv["languages"]],
     }
 
 
@@ -315,6 +399,33 @@ def block_patterns(profile: dict) -> list[str]:
     out = [] if levels & EARLY_LEVELS else JUNIOR_TITLE_PATTERNS + JUNIOR_EXTRA_PATTERNS
     out += [_phrase_pattern(w) for w in profile["search"]["exclude"]]
     return out or [r"(?!x)x"]               # matches nothing
+
+
+def company_patterns(profile: dict) -> list[str]:
+    """Employers the person doesn't want jobs from ("Aramco" also drops "Saudi Aramco")."""
+    return [_phrase_pattern(c) for c in profile["search"].get("exclude_companies") or [] if c.strip()]
+
+
+def field_keywords(profile: dict) -> list[str]:
+    """Words that show a posting is in the person's field: their skills and their own list."""
+    return list(dict.fromkeys(skill_terms([s for s in map(brand_case, profile["cv"]["skills"]) if clean_skill(s)])
+                              + profile["search"].get("keywords", [])))
+
+
+PREFERENCE_LINES = (("years", "Years of experience"), ("relocate", "Relocation"), ("notice", "Notice period / start"),
+                    ("salary", "Expected monthly salary"), ("visa", "Residency / visa"))
+
+
+def preference_lines(profile: dict) -> list[str]:
+    p = profile.get("preferences") or {}
+    out = [f"- {label}: {p[key]}" for key, label in PREFERENCE_LINES if p.get(key)]
+    if p.get("work_modes"):
+        out.append(f"- Work arrangement: {', '.join(p['work_modes'])}")
+    if p.get("job_types"):
+        out.append(f"- Job type: {', '.join(p['job_types'])}")
+    if p.get("other"):
+        out.append(f"- In their own words: {p['other']}")
+    return out
 
 
 def _lines(title: str, items: list[str]) -> list[str]:
@@ -354,7 +465,15 @@ def knowledge(profile: dict) -> str:
     parts = [cv_facts(profile), "## Job search",
              f"- Target job titles (roles sought, not necessarily held): {', '.join(s['titles']) or 'none'}",
              f"- Seniority sought: {', '.join(s['levels'])}",
-             f"- Country searched: {s['country']}", ""]
+             f"- Country searched: {s['country']}"]
+    if s.get("keywords"):
+        parts.append(f"- Their field (industries, specialities, tools): {', '.join(s['keywords'])}")
+    if profile.get("nationality"):
+        parts.append(f"- Nationality: {profile['nationality']}")
+    parts.append("")
+    prefs = preference_lines(profile)
+    if prefs:
+        parts += ["## How they want to work (for scoring only - never written into a CV)", *prefs, ""]
     if profile.get("notes"):
         parts += ["## Notes from the person (for scoring only - never written into a CV)", profile["notes"], ""]
     return "\n".join(parts).strip() + "\n"
@@ -365,7 +484,7 @@ def track_name(profile: dict) -> str:
 
 
 def tracks_text(profile: dict) -> str:
-    keywords = list(dict.fromkeys(profile["search"]["titles"] + profile["cv"]["skills"]))[:20]
+    keywords = list(dict.fromkeys(profile["search"]["titles"] + field_keywords(profile)))[:20]
     return (f"   - **Track 1: {track_name(profile)}**\n"
             "     This profile has one track: select it for every job.\n"
             f"     Keywords: {', '.join(keywords) or 'none'}.")
@@ -396,7 +515,7 @@ EVALUATION RULES
 =====================================================================
 1. job_url: return exactly one evaluation for EVERY job in the input - N jobs in, N evaluations out - with job_url copied character-for-character.
 2. The profile is the only source of truth. Never invent experience, titles, employers, metrics or credentials. The target job titles are roles sought, not titles held, unless the experience shows them.
-3. Nationality: if a posting is restricted to a nationality or citizenship that the profile's notes do not show (e.g. "Saudi nationals only", "Saudization", "GCC nationals only", "توطين"), set ats_score 0, interview_score 0, fit_score 0, selected_track 1, secondary_track null, track_selection_confidence "high", tailoring_level "light", summary null, and both selected_track_reason and reasoning to: "تم استبعاد الوظيفة تلقائياً نظراً لاشتراط جنسية محددة."
+3. Nationality: if a posting is restricted to a nationality or citizenship that the profile (its Nationality line and notes) does not show (e.g. "Saudi nationals only", "Saudization", "GCC nationals only", "توطين"), set ats_score 0, interview_score 0, fit_score 0, selected_track 1, secondary_track null, track_selection_confidence "high", tailoring_level "light", summary null, and both selected_track_reason and reasoning to: "تم استبعاد الوظيفة تلقائياً نظراً لاشتراط جنسية محددة."
 4. Location: the search covers {{COUNTRY}}. Respect any relocation or city preference in the notes, and mention the city in reasoning when it matters.
 5. Scores, each 0-100:
    A. ats_score - how well a CV tailored truthfully from this profile can carry the posting's keywords, tools, domain terms and role phrasing. Do not over-estimate.
@@ -423,9 +542,9 @@ Use ONLY the facts in the CV source below. Never invent employers, titles, dates
 
 RULES
 1. Source-faithful: every line must be backed by the CV source. Where it gives no figure, keep the result qualitative.
-2. Official titles only in work_experience: copy each role's title, company and period as the source gives them. Target titles may appear only in the headline, as the role being targeted.
-3. Professional, concise English. The whole CV, with its fixed sections, must fit on two pages.
-4. ATS: use the posting's exact phrasing where real evidence supports it. Start bullets with strong action verbs. Never add a skill or tool only for ATS.
+2. Official titles only: copy each role's title, company and period exactly as the source gives them. Never put the posting's job title anywhere as if the person held it - not in the headline either.
+3. It must read as the person's own CV, written by a human: keep their wording; change a phrase only to use the posting's exact term for the same thing. No stock phrases ("results-driven", "proven track record", "passionate", "dynamic", "leverage", "spearheaded", "brings hands-on experience in ... to the ... role"), no sentence that only restates the posting, no adjective lists.
+4. The whole CV, with its fixed sections, must fit on two pages. Never add a skill or tool only for ATS.
 5. Contact details, education, certifications, training, awards and languages are added from the profile after your JSON. Do not write them into any field.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -433,19 +552,16 @@ CV SOURCE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {{TRACK_BLUEPRINT}}
 
-TAILORING LEVEL (from the evaluation metadata)
-- light: headline, profile paragraphs and core competencies.
-- moderate: also re-order the achievements and the bullets' emphasis.
-- deep: rebuild the achievements and tailor every role to the job.
-- special_cv: a bespoke selection from the whole source. Keep the layout.
+TAILORING (whatever the tailoring level in the metadata): select and order the person's real material
+for this job; do not rewrite it into new prose.
 
 FIELDS
-- headline: [Target Job Title] | [Pillar] | [Pillar], under 75 characters.
-- about_paragraphs: exactly 2 short paragraphs - positioning for this job, then proof points.
+- headline: the person's own headline from the source, unchanged.
+- about_paragraphs: their own summary; only swap in the posting's exact term where it names the same thing.
 - achievements_title: e.g. "Key Achievements:".
-- key_achievements: 4-8 one-line bullets from the source, most relevant first.
-- work_experience: the roles in the source, most recent first, each with company, period, role_title, role_description (one sentence) and 2-5 bullets.
-- core_competencies: 5-8 keywords separated by " | ", matched to the job.
+- key_achievements: the achievements from the source, word for word, most relevant to this job first (none if the source has none).
+- work_experience: every role in the source, most recent first, with its title, company, period and description as given, and its bullets word for word - the ones this job cares about first.
+- core_competencies: 8-12 of their skills separated by " | ", the ones this posting asks for first.
 Return only JSON matching the schema.
 """
 

@@ -4,7 +4,8 @@ Used when AI_MODE is "basic" (the default). It does plain, explainable matching:
 
 - Fit comes from how many of the candidate's search keywords and CV-track terms
   appear in the job's title and description, and whether the title is at the
-  candidate's level. Jobs restricted to a nationality score 0, as in the AI prompt.
+  candidate's level. Jobs restricted to a nationality the candidate doesn't hold
+  score 0, as in the AI prompt (a Saudi candidate keeps "Saudi nationals only" jobs).
 - "About the Role" is an excerpt of the real posting; "Why It Fits" lists what matched.
 - The CV is the candidate's standard CV (approved facts only - the same content Demo
   Mode uses), headed with the job title, with the most relevant achievements and
@@ -38,6 +39,39 @@ TITLE_NATIONALITY_RE = re.compile(
     r"\b(?:saudi|emirati|qatari|kuwaiti|omani|bahraini|gcc)\s+nationals?\b|\bsaudis?\s+only\b|\bnationals?\s+only\b"
     r"|\(\s*saudis?\s*\)|للسعوديين|سعودي(?:ة)?\s+الجنسية", re.I)
 NATIONALITY_REASON = "Skipped: the posting is open only to a specific nationality."
+# Which nationals a restriction names, and which the person is (from what they wrote: "Saudi", "سعودية").
+# Any GCC national passes "GCC nationals only"; "nationals only" alone means the searched country's.
+NATIONALS = {
+    "saudi": ("saudi", "ksa", "سعود"), "emirati": ("emirati", "uae", "إمارات", "اماراتي"),
+    "qatari": ("qatari", "قطر"), "kuwaiti": ("kuwaiti", "كويت"), "omani": ("omani", "عمان", "عماني"),
+    "bahraini": ("bahraini", "بحرين"), "egyptian": ("egyptian", "مصر"),
+}
+GCC = {"saudi", "emirati", "qatari", "kuwaiti", "omani", "bahraini"}
+COUNTRY_NATIONALS = {"saudi arabia": "saudi", "united arab emirates": "emirati", "qatar": "qatari",
+                     "kuwait": "kuwaiti", "oman": "omani", "bahrain": "bahraini", "egypt": "egyptian"}
+
+
+def nationals_of(nationality: str) -> set[str]:
+    """'Saudi' / 'Saudi Arabian' / 'سعودي' -> {'saudi', 'gcc'}; anything else -> what it names."""
+    low = (nationality or "").lower()
+    # English words from their start ("Romanian" isn't Omani); Arabic anywhere ("السعودية").
+    found = {group for group, words in NATIONALS.items()
+             if any(re.search(r"\b" + w, low) if w.isascii() else w in low for w in words)}
+    return found | ({"gcc"} if found & GCC else set())
+
+
+def restricted_to(title: str, description: str, country: str) -> list[set[str]]:
+    """Each nationality restriction in a posting -> the nationals it is open to."""
+    out = []
+    for rx, text in ((NATIONALITY_RE, title), (TITLE_NATIONALITY_RE, title), (NATIONALITY_RE, description)):
+        for m in rx.finditer(text):
+            words = m.group(0)
+            # "Saudi nationals only" is open to Saudis alone, not to every GCC national.
+            named = (nationals_of(words) - {"gcc"}) | ({"gcc"} if "gcc" in words.lower() else set())
+            if "saudization" in words.lower() or "للسعوديين" in words:
+                named.add("saudi")
+            out.append(named or {COUNTRY_NATIONALS.get(country.lower(), "saudi")})
+    return out
 LEVELS = (  # (pattern in the title, level) - first match wins
     (re.compile(r"\b(?:chief|c[efiotm]o|vice\s+president|vp|svp|evp|general\s+manager|head|managing\s+director)\b", re.I), "executive"),
     (re.compile(r"\b(?:director|associate\s+director)\b", re.I), "director"),
@@ -140,6 +174,15 @@ class BasicAI:
         self.early = bool(self.levels & EARLY)
         # Words like "specialist" in the person's own target titles aren't "junior" for them.
         self.own_words = {w.lower() for k in candidate.keywords for w in JUNIOR_RE.findall(k)}
+        self.nationals = nationals_of(getattr(candidate, "nationality", ""))
+        self.country = getattr(candidate, "location", "") or getattr(pipeline, "LOCATION", "") or "Saudi Arabia"
+
+    def closed_to_them(self, title: str, description: str) -> bool:
+        """The posting is reserved for nationals the person isn't (a Saudi passes "Saudi nationals only")."""
+        if not (NATIONALITY_RE.search(description) or NATIONALITY_RE.search(title) or TITLE_NATIONALITY_RE.search(title)):
+            return False
+        rules = restricted_to(title, description, self.country)
+        return not rules or any(not (open_to & self.nationals) for open_to in rules)
 
     # --------------------------------------------------------------- scoring --
     def evaluate_jobs(self, batch: list[dict]):
@@ -168,7 +211,7 @@ class BasicAI:
     def _evaluate(self, job: dict):
         ja = self.ja
         title, description = job.get("title") or "", job.get("description") or ""
-        if NATIONALITY_RE.search(description) or NATIONALITY_RE.search(title) or TITLE_NATIONALITY_RE.search(title):
+        if self.closed_to_them(title, description):
             self.breakdowns[job["url"]] = {"nationality": True}
             return ja.JobEvaluation(
                 job_url=job["url"], ats_score=0, interview_score=0, fit_score=0, selected_track=min(self.tracks),
@@ -256,10 +299,10 @@ class BasicAI:
 
     # ------------------------------------------------------------------ CVs --
     def tailor(self, job: dict, track: int):
-        """A CV for this one job, from the person's own facts only (nothing is invented):
-        the job's title as the headline with the two strengths it asks for most, a closing line in the
-        summary that ties those strengths to the role, the matching skills first, and in every role
-        the points this posting cares about first."""
+        """The person's own CV for this job - their headline, their summary, their roles with every
+        point in the order they wrote it. Nothing is added or reworded: a CV that reads as written by
+        a template (a posting's title as the headline, a stock closing sentence, shuffled points) costs
+        interviews. The one change per job is invisible: the skills this posting asks for come first."""
         ja = self.ja
         content = getattr(self.c, "cv_content", None)
         base = content() if content else ja.standard_cv(self.c.key)
@@ -289,53 +332,14 @@ class BasicAI:
             return named * 3 + sum(weights[w] for w in found)
         asked = sorted((s for s in skills if skill_score(s)), key=skill_score, reverse=True)
 
-        terms = [rx for _, rx in self.keywords] + [rx for _, rx in self.tracks.get(track, [])] + [_term_re(s) for s in skills]
-        terms += [_term_re(w) for w in re.findall(r"[A-Za-z]{5,}", title) if w.lower() not in GENERIC]
-        hits = [rx for rx in terms if rx.search(posting)]
-
-        def relevance(line: str) -> int:
-            """Points this posting cares about: its search terms (strongest), then its own recurring words."""
-            return (sum(3 for rx in hits if rx.search(line))
-                    + sum(min(weights.get(w, 0), 3) for w in stems(line)))
-
-        # Headline: the role, then what this person brings to it (left off when the title is already long).
-        pillar = " | ".join(asked[:2]) or base.get("pillar", "")
-        if pillar and (pillar.lower() in title.lower() or title.lower() in pillar.lower()):
-            pillar = " | ".join(s for s in skills[:2] if s.lower() not in title.lower())
-        headline = f"{title} | {pillar}" if pillar and len(title) + len(pillar) <= 80 else title
-
-        # Summary: their own words, closing with one line that connects them to this role.
-        own_text = " ".join([*base.get("about", []), *base.get("achievements", []),
-                             *(b for e in base.get("experience", []) for b in e.get("bullets", []))])
-        prose = f"{description} {own_text}"
-        # Names: words written with a capital in the middle of a sentence and never in lower case (Argaam, Excel).
-        names = {w.lower() for w in re.findall(r"(?<=[a-z,] )[A-Z][a-z]+", prose)} - set(re.findall(r"\b[a-z]+\b", prose))
-
-        def in_sentence(skill: str) -> str:
-            """'Product Management' reads as 'product management' mid-sentence. A phrase with a name or an
-            acronym in it ('Microsoft Excel', 'Applied Generative AI') stays exactly as written."""
-            words = re.findall(r"[A-Za-z]+", skill)
-            plain = all(w.islower() or (w[1:].islower() and w.lower() not in names) for w in words)
-            return skill.lower() if plain else skill
-        about = [p for p in base.get("about", []) if p]
-        if asked:
-            named = [in_sentence(s) for s in asked[:3]]
-            joined = named[0] if len(named) == 1 else f"{', '.join(named[:-1])} and {named[-1]}"
-            role = f"the {title} role" if len(title) <= 60 and "|" not in title else "this role"
-            close = f"Brings hands-on experience in {joined} to {role}."
-            about = [*about[:-1], f"{about[-1].rstrip()} {close}"] if about else [close]
-
-        experience = []
-        for entry in base.get("experience", []):
-            entry = dict(entry)
-            entry["bullets"] = sorted(entry.get("bullets", []), key=relevance, reverse=True)   # stable: ties keep order
-            experience.append(ja.WorkExperienceEntry(**entry))
-        competencies = asked + [s for s in skills if s not in asked]
+        # Skills in groups ("Core: HTML5, CSS3") keep the person's order; single skills lead with the asked ones.
+        grouped = any(re.match(r"^[^:]{2,40}:\s", s) for s in skills)
+        competencies = list(skills) if grouped else asked + [s for s in skills if s not in asked]
         return ja.TailoredCV(
-            headline=headline,
-            about_paragraphs=about,
+            headline=base.get("pillar") or (skills[0] if skills else title),
+            about_paragraphs=[p for p in base.get("about", []) if p],
             achievements_title=base.get("achievements_title") or "Key Achievements:",
-            key_achievements=sorted(base.get("achievements", []), key=relevance, reverse=True)[:7],
-            work_experience=experience,
-            core_competencies=" | ".join(competencies[:10]),
+            key_achievements=list(base.get("achievements", [])),
+            work_experience=[ja.WorkExperienceEntry(**dict(e)) for e in base.get("experience", [])],
+            core_competencies=" | ".join(competencies[:12]),     # more reads as keyword stuffing
         )

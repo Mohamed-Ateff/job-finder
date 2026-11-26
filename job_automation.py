@@ -1011,7 +1011,8 @@ def location_ok(place: str) -> bool:
 
 def filter_jobs(jobs: list[dict]) -> list[dict]:
     kept = []
-    blocked = no_hint = elsewhere = 0
+    blocked = no_hint = elsewhere = skipped_company = 0
+    companies = CANDIDATE.company_block_re
     for job in jobs:
         if CANDIDATE.title_block_re.search(job["title"]):
             blocked += 1
@@ -1019,11 +1020,14 @@ def filter_jobs(jobs: list[dict]) -> list[dict]:
             no_hint += 1
         elif not location_ok(job["location"]):
             elsewhere += 1
+        elif companies and companies.search(job.get("company") or ""):
+            skipped_company += 1
         else:
             kept.append(job)
     log.info(
-        "filter: %d -> %d (blocked title %d, no seniority/function match %d, outside %s %d)",
+        "filter: %d -> %d (blocked title %d, no seniority/function match %d, outside %s %d%s)",
         len(jobs), len(kept), blocked, no_hint, LOCATION, elsewhere,
+        f", company skipped {skipped_company}" if companies else "",
     )
     return kept
 
@@ -1508,7 +1512,7 @@ def render_cv_docx(cv: TailoredCV, profile: dict | None = None) -> bytes:
     write(para(0, 1), name, 22, bold=True, color=ink)
     if cv.headline:
         write(para(0, 3), cv.headline, 11.5, bold=True, color=accent)
-    contact = [profile.get(k) for k in ("location", "phone", "email", "linkedin")]
+    contact = [profile.get(k) for k in ("location", "phone", "email", "linkedin", "website")]
     if any(contact):
         write(para(0, 4), "  ·  ".join(c for c in contact if c), 9.5, color=muted)
 
@@ -1519,7 +1523,18 @@ def render_cv_docx(cv: TailoredCV, profile: dict | None = None) -> bytes:
     if cv.core_competencies:
         heading("Core Skills")
         skills = [s.strip() for s in re.split(r"\s*[|·•]\s*", cv.core_competencies) if s.strip()]
-        write(para(0, 2), "  ·  ".join(skills))
+        groups = [s for s in skills if re.match(r"^[^:]{2,40}:\s", s)]
+        if groups:                      # "Frameworks & Libraries: React, Next.js" - one line each, as written
+            for g in groups:
+                label, rest = g.split(":", 1)
+                p = para(0, 1.5)
+                write(p, f"{label.strip()}: ", bold=True)
+                write(p, rest.strip())
+            rest_skills = [s for s in skills if s not in groups]
+            if rest_skills:
+                write(para(0, 2), "  ·  ".join(rest_skills))
+        else:
+            write(para(0, 2), "  ·  ".join(skills))
     if cv.key_achievements:
         heading(cv.achievements_title or "Key Achievements")
         for item in cv.key_achievements:
@@ -1830,6 +1845,8 @@ class Candidate:
     cv_content: Callable[[], dict] | None = None   # the standard CV (free mode), demo.json's "cv" shape
     cv_fixed: Callable[[], dict] | None = None     # contact + fixed CV sections, cv_profile.json's shape
     former_names: list[str] = field(default_factory=list)     # earlier names (CV file names)
+    nationality: str = ""                          # "Saudi": jobs only Saudi nationals may apply for are kept
+    company_block_re: re.Pattern | None = None     # employers whose jobs are dropped before scoring
 
 
 def standard_cv(key: str) -> dict:
@@ -1848,9 +1865,9 @@ def seed_profile(c: Candidate) -> dict:
     p.update(headline=cv.get("pillar", ""), email=fixed.get("email", ""), phone=fixed.get("phone", ""),
              linkedin=fixed.get("linkedin", ""), city=place[0] if len(place) > 1 else "")
     country = c.location or LOCATION
-    p["search"] = {"titles": list(c.keywords), "country": country if country in profiles.COUNTRIES else "Saudi Arabia",
-                   "levels": [lv for lv in c.experience_levels if lv in profiles.LEVELS] or ["mid-senior"],
-                   "sites": list(c.sources or SOURCES), "exclude": []}
+    p["search"].update(titles=list(c.keywords), country=country if country in profiles.COUNTRIES else "Saudi Arabia",
+                       levels=[lv for lv in c.experience_levels if lv in profiles.LEVELS] or ["mid-senior"],
+                       sites=list(c.sources or SOURCES))
     sep = next((s for s in (" | ", " · ", " • ", ", ") if s in cv.get("competencies", "")), " | ")
     p["cv"].update(
         summary=list(cv.get("about", [])), achievements=list(cv.get("achievements", [])),
@@ -1885,7 +1902,18 @@ def apply_profile(c: Candidate, prof: dict) -> Candidate:
     c.cv_content = lambda: profiles.cv_content(prof)
     c.cv_fixed = lambda: profiles.cv_fixed(prof)
     c.former_names = list(prof.get("former_names") or [])
+    c.nationality = prof.get("nationality", "")
+    c.company_block_re = company_pattern(prof)
+    # The words of their field count as evidence for every track in free scoring.
+    if s.get("keywords"):
+        c.track_keywords = {n: list(dict.fromkeys([*c.track_keywords.get(n, []), *s["keywords"]]))
+                            for n in c.track_names}
     return c
+
+
+def company_pattern(prof: dict) -> re.Pattern | None:
+    patterns = profiles.company_patterns(prof)
+    return word_pattern(patterns) if patterns else None
 
 
 def simple_candidate(key: str, prof: dict) -> Candidate:
@@ -1928,10 +1956,12 @@ def simple_candidate(key: str, prof: dict) -> Candidate:
         cv_free_text_metadata=True,
         kind="simple",
         location=s["country"], sources=list(s["sites"]),
-        track_keywords={1: list(dict.fromkeys(prof["cv"]["skills"] + titles))},
+        track_keywords={1: list(dict.fromkeys(profiles.field_keywords(prof) + titles))},
         cv_content=lambda: profiles.cv_content(prof),
         cv_fixed=lambda: profiles.cv_fixed(prof),
         former_names=list(prof.get("former_names") or []),
+        nationality=prof.get("nationality", ""),
+        company_block_re=company_pattern(prof),
     )
 
 

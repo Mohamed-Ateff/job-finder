@@ -45,7 +45,7 @@
           ], "1fr .8fr 2.4fr") +
           list([
             "The score shows how closely the posting matches the profile’s job titles, skills and level.",
-            "A posting open only to a specific nationality scores 0.",
+            "A posting open only to a nationality the person doesn’t hold scores 0. Their nationality is in the profile.",
           ]) },
         { id: "cvs", icon: "doc", color: "orange", title: "The CVs", html:
           p("<b>Download CV</b> makes a Word CV for that job: the job’s title as the headline, the matching skills and achievements first, and a summary that ties the experience to the role.") +
@@ -53,6 +53,7 @@
         { id: "faq", icon: "question", color: "pink", title: "Questions", html:
           qa([
             ["Does a search start over each time?", "No. <b>Find New Jobs</b> only adds jobs that are new since the last search. Jobs already in the list, or deleted from it, never come back. To really start over, use <b>Clear Jobs…</b> in the profile."],
+            ["How do I add someone new?", "Choose <b>New Profile…</b> and upload their PDF: a CV, or a CV with its discovery record. The profile fills itself in."],
             ["How long does a search take?", "About 1 to 3 minutes. Once a day is enough."],
             ["Why do I see no jobs, or no matches?", `Either no search has run yet, or nothing scored ${t.good} or more. Choose <b>All</b> to see every job, or press <b>Find New Jobs</b>. Keep the job titles in the profile close to the roles you really want.`],
             ["How do I remove a job I don’t want?", "Press the trash button on the job. <b>Undo</b> appears for a few seconds in case it was a mistake."],
@@ -92,7 +93,7 @@
           ], "1.2fr .8fr 2.4fr") +
           list([
             "تعكس الدرجة مدى تطابق الإعلان مع المسميات الوظيفية والمهارات والمستوى في الملف.",
-            "الإعلان المخصص لجنسية محددة فقط يحصل على 0.",
+            "الإعلان المخصص لجنسية لا يحملها الشخص يحصل على 0، وجنسيته مسجلة في الملف.",
           ]) },
         { id: "cvs", icon: "doc", color: "orange", title: "السير الذاتية", html:
           p(`«تنزيل السيرة الذاتية» ينشئ ملف ${b("Word")} لهذه الوظيفة: مسمّاها عنواناً، والمهارات والإنجازات المطابقة أولاً، وملخصاً يربط الخبرة بالدور.`) +
@@ -100,6 +101,7 @@
         { id: "faq", icon: "question", color: "pink", title: "أسئلة شائعة", html:
           qa([
             ["هل يبدأ البحث من جديد في كل مرة؟", "لا. زر «ابحث عن وظائف جديدة» يضيف فقط الوظائف الجديدة منذ البحث السابق. والوظائف الموجودة في القائمة أو المحذوفة منها لا تعود. وللبدء فعلاً من الصفر استخدم «مسح الوظائف…» في الملف."],
+            ["كيف أضيف شخصاً جديداً؟", "اختر «ملف جديد…» وارفع ملف PDF الخاص به: سيرة ذاتية، أو سيرة ذاتية مع ملف الاكتشاف المهني. ويُملأ الملف تلقائياً."],
             ["كم يستغرق البحث؟", "من دقيقة إلى ثلاث دقائق تقريباً. ومرة واحدة يومياً تكفي."],
             ["لماذا لا تظهر وظائف، أو لا توجد وظائف مطابقة؟", `إما أنه لم يُجرَ أي بحث بعد، أو لم تحصل أي وظيفة على ${t.good} أو أكثر. اختر «الكل» لرؤية كل الوظائف، أو اضغط «ابحث عن وظائف جديدة». واجعل المسميات الوظيفية في الملف قريبة من الأدوار التي تريدها فعلاً.`],
             ["كيف أحذف وظيفة لا أريدها؟", "اضغط زر سلة المهملات في الوظيفة. ويظهر زر «تراجع» لبضع ثوانٍ تحسّباً للخطأ."],

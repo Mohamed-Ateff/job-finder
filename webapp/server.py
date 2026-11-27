@@ -27,7 +27,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -442,7 +442,8 @@ def job_rows(c: ja.Candidate) -> list[dict]:
             "description": description,
             "apply": how,
             "emails": emails,
-            "remote": bool(d.get("remote")),
+            "remote": bool(d.get("remote")) or ja.looks_remote(title, d.get("location", ""), description),
+            "company_site": d.get("company_site") if str(d.get("company_site", "")).startswith("http") else "",
             "breakdown": d.get("breakdown"),
             "has_cv": bool(d.get("cv")),
         })
@@ -996,6 +997,44 @@ def check_apply_type(key: str, url: str):
     return {"apply": kind, "emails": emails}
 
 
+def contacts_file() -> Path:
+    """Company -> its website and role email addresses, found once (shared by everyone in the app)."""
+    return ja.STATE_DIR / "company_contacts.json"
+
+
+_contacts_lock = threading.Lock()
+CONTACTS_RECHECK_DAYS = 30
+
+
+@app.get("/api/company-contact/{key}")
+def company_contact(key: str, url: str):
+    """The company's website and its HR / careers / contact addresses for one job, from the company's own
+    site (asked once per company, then remembered)."""
+    import company_contacts
+
+    c = candidate(key)
+    job = job_detail(c, url)
+    if not job:
+        raise HTTPException(404, "Unknown job")
+    firm = ja.company_key(job.get("company", ""))
+    known = (read_json(contacts_file(), {}) or {}).get(firm) if firm else None
+    if known and known.get("checked", "") >= (datetime.now() - timedelta(days=CONTACTS_RECHECK_DAYS)).isoformat():
+        return {"site": known.get("site", ""), "emails": known.get("emails", [])}
+    if demo_on() or not firm:
+        return {"site": "", "emails": []}
+    site = job.get("company_site", "") if str(job.get("company_site", "")).startswith("http") else ""
+    if not site:
+        site = company_contacts.linkedin_company_site(url)
+        if site is None:                                # LinkedIn didn't answer: ask again next time
+            return {"site": "", "emails": []}
+    emails = company_contacts.site_emails(site) if site else []
+    with _contacts_lock:
+        cache = read_json(contacts_file(), {}) or {}
+        cache[firm] = {"site": site, "emails": emails, "checked": datetime.now().isoformat(timespec="seconds")}
+        ja.write_json(contacts_file(), cache)
+    return {"site": site, "emails": emails}
+
+
 # ------------------------------------------------------------------ email --
 MAX_EMAIL_JOBS = 10
 RUN_EMAIL_JOBS = 5                      # after a search: only the five best, so the email gets read
@@ -1337,7 +1376,8 @@ def overview(key: str):
 def jobs(key: str):
     c = candidate(key)
     rows = job_rows(c)
-    return {"jobs": rows, "thresholds": thresholds(), "checking_apply": start_apply_checks(c, rows)}
+    return {"jobs": rows, "thresholds": thresholds(), "checking_apply": start_apply_checks(c, rows),
+            "country": c.location or ja.LOCATION}
 
 
 @app.get("/api/runs/{key}")

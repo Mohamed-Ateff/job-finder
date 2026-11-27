@@ -20,7 +20,7 @@ REPO = os.environ.get("DATA_REPO", "")
 TOKEN = os.environ.get("HF_TOKEN", "")
 SAVE_EVERY = 15
 FOLDERS = ("candidates/", "data/", "runs/", "backups/")
-ROOT_FILES = re.compile(r"^(jobs.*|daily_search|apply_.*|applied_.*|hidden_.*|descriptions_.*|client_checklist)\.json$|^\.env$")
+ROOT_FILES = re.compile(r"^(jobs.*|daily_search|company_contacts|apply_.*|applied_.*|hidden_.*|descriptions_.*|client_checklist)\.json$|^\.env$")
 
 
 def tracked(rel: str) -> bool:

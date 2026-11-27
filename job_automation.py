@@ -712,6 +712,24 @@ REMOTE_ONLY_IN = re.compile(
 OPEN_FROM_ANYWHERE = ("anywhere", "worldwide", "mena", "middle east", "emea", "africa", "gcc", "remote")
 
 
+# A remote job, by what its title, place or posting says ("Remote", "work from home", "fully remote",
+# "a remote, high-autonomy environment", "عن بعد") - unless it says it isn't ("no remote work").
+REMOTE_PLACE_RE = re.compile(r"\bremote\b|work\s+from\s+home|\bwfh\b|عن\s*بُ?عد|من\s+المنزل", re.I)
+REMOTE_TEXT_RE = re.compile(
+    r"\b(?:fully|100\s*%|completely|entirely)\s+remote\b|\bremote[- ](?:first|only|friendly|based)\b"
+    r"|\bremote(?:ly)?\s*(?:,\s*[\w-]+\s*)?(?:role|position|job|opportunity|work(?:ing)?|environment|team|setup|contract"
+    r"|or\s+(?:freelance|hybrid|on-?site))\b|\b(?:role|position|job)\s+is\s+(?:fully\s+)?remote\b"
+    r"|\bwork(?:ing)?\s+(?:from\s+home|remotely)\b|\bwfh\b|عن\s*بُ?عد|من\s+المنزل", re.I)
+NOT_REMOTE_RE = re.compile(r"\b(?:no|not|non|isn't|is\s+not)\s+(?:a\s+)?(?:fully\s+)?$", re.I)
+
+
+def looks_remote(title: str, location: str = "", description: str = "") -> bool:
+    if REMOTE_PLACE_RE.search(f"{title} | {location}"):
+        return True
+    text = re.sub(r"<[^>]+>", " ", description or "")
+    return any(not NOT_REMOTE_RE.search(text[max(0, m.start() - 20): m.start()]) for m in REMOTE_TEXT_RE.finditer(text))
+
+
 # Common words that only appear in one language: enough of them and the posting is written in it.
 LANGUAGE_WORDS = {
     "english": {"the", "and", "with", "you", "we", "our", "for", "will", "are", "your", "this", "that", "have", "from"},
@@ -909,6 +927,8 @@ def jobspy_row(row: dict, source: str) -> dict:
         # JobSpy keeps the apply link only when it leaves Indeed; none means Indeed's own quick apply.
         kind = "site" if text("job_url_direct") else "easy"
     item["apply"] = kind
+    if row.get("is_remote") is True:                    # the site's own "Remote" mark
+        item["is_remote"] = True
     if source == "linkedin":
         item["jobId"] = job_id.removeprefix("li-")
     return item
@@ -1116,7 +1136,7 @@ def normalize(items: list[dict]) -> list[dict]:
             "posted": posted if re.fullmatch(r"\d{4}-\d\d-\d\d", posted) else "",
         }
         set_apply(job, str(item.get("apply") or ""))
-        if item.get("remote"):
+        if item.get("remote") or item.get("is_remote") is True or looks_remote(title, place, description):
             job["remote"] = True
         jobs.append(job)
     missing = sum(1 for job in jobs if not job["description"])
@@ -1260,16 +1280,18 @@ def filter_jobs(jobs: list[dict]) -> list[dict]:
     kept = []
     blocked = no_hint = elsewhere = skipped_company = remote_closed = 0
     companies = CANDIDATE.company_block_re
+    wants_remote = getattr(CANDIDATE, "remote", False)
     for job in jobs:
+        local = location_ok(job["location"])
         if CANDIDATE.title_block_re.search(job["title"]):
             blocked += 1
         elif not CANDIDATE.title_hint_re.search(job["title"]):
             no_hint += 1
-        elif job.get("remote") and not (remote_open_here(job)
-                                        and speaks(posting_language(f"{job['title']} {job.get('description', '')}"))):
+        elif not local and not (wants_remote and job.get("remote")):
+            elsewhere += 1               # abroad, and not a remote job for someone who wants one
+        elif not local and not (remote_open_here(job)
+                                and speaks(posting_language(f"{job['title']} {job.get('description', '')}"))):
             remote_closed += 1           # remote, but only for people living in another country or speaking its language
-        elif not job.get("remote") and not location_ok(job["location"]):
-            elsewhere += 1
         elif companies and companies.search(job.get("company") or ""):
             skipped_company += 1
         else:

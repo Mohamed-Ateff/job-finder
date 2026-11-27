@@ -86,6 +86,11 @@ window.AR = {
   "Easy Apply on {site}": "تقديم سريع عبر {site}", "Apply by Email": "قدّم بالبريد", "Open Job": "افتح الوظيفة",
   "Write an email": "اكتب رسالة", "PDF": "PDF", "Word": "Word",
   "Best for applying online": "الأنسب للتقديم عبر الإنترنت", "To edit before sending": "للتعديل قبل الإرسال",
+  "No Remote Matches Yet": "لا توجد وظائف عن بُعد مناسبة بعد",
+  "Remote jobs that fit are listed here. They’re searched when the profile includes remote work.":
+    "تظهر هنا الوظائف عن بُعد المناسبة. يُبحث عنها عندما يتضمّن الملف العمل عن بُعد.",
+  "Looking for the company’s email…": "جارٍ البحث عن بريد الشركة…", "No email on the company’s website": "لا يوجد بريد على موقع الشركة",
+  "The company’s website": "موقع الشركة",
   "Search every morning": "ابحث كل صباح", "Off": "إيقاف", "On": "تشغيل",
   "From {hour}:00 Cairo time, for everyone here. The 5 best matches are emailed to each person with email set up, quickest to apply first.":
     "من الساعة {hour}:00 بتوقيت القاهرة، لكل الأشخاص هنا. أفضل 5 وظائف تُرسل بالبريد لكل من أعدّ بريده، والأسهل في التقديم أولاً.",

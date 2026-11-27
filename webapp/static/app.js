@@ -208,7 +208,8 @@ const VIEWS = {
   guide: { title: "How It Works", tab: "Guide", icon: "book", kind: "page", needs: ["profile"] },
 };
 const ROUTE_ALIASES = { matches: "jobs", digests: "jobs", setup: "profile" };   // old links still land somewhere sensible
-const FILTERS = [["matches", "Matches"], ["all", "All"], ["applied", "Applied"]];
+/* Matches split in two: jobs in the person's own country, and remote ones. Then everything, and Applied. */
+const filters = () => [["matches", C().country || "Matches"], ["remote", "Remote"], ["all", "All"], ["applied", "Applied"]];
 const VERDICT = { strong: "Strong", good: "Good", moderate: "Moderate", weak: "Weak" };
 const MODES = {
   dry: { label: "Preview", start: "Start Preview",
@@ -234,7 +235,7 @@ const S = {
   candidates: [], key: store.get("candidate", null), view: "jobs", appearance: store.get("appearance", "auto"),
   cache: {}, sel: {}, query: "", filter: "matches", forms: {}, runs: {}, finishedAt: {}, poll: null, token: 0,
   expanded: null, trackOpen: null, detailOpen: false, booted: false, painted: "", before: {},
-  applying: null,
+  applying: null, company: {},
 };
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 const cand = () => S.candidates.find((c) => c.key === S.key) || S.candidates[0];
@@ -245,6 +246,7 @@ async function fetchKind(kind) {
   if (kind === "summary") return api(`/api/overview/${enc(S.key)}`);
   if (kind === "jobs") {
     const r = await api(`/api/jobs/${enc(S.key)}`);
+    C().country = r.country || "";
     if (r.checking_apply) watchApplyChecks(S.key);
     return r.jobs;
   }
@@ -527,7 +529,8 @@ function paintMain(quiet) {
 /* =============================================================== lists */
 const isMatch = (j) => j.verdict === "strong" || j.verdict === "good";function jobsFor() {
   let rows = C().jobs || [];
-  if (S.filter === "matches") rows = rows.filter(isMatch);  else if (S.filter === "applied") rows = rows.filter((j) => j.applied);
+  if (S.filter === "matches") rows = rows.filter((j) => isMatch(j) && !j.remote);
+  else if (S.filter === "remote") rows = rows.filter((j) => isMatch(j) && j.remote);  else if (S.filter === "applied") rows = rows.filter((j) => j.applied);
   const q = S.query.trim().toLowerCase();
   if (q) rows = rows.filter((j) => `${j.title} ${j.company} ${j.location} ${j.track_name}`.toLowerCase().includes(q));
   // The latest search's jobs first, best score first; everything older below, as before.
@@ -545,9 +548,10 @@ function paintList(quiet) {
   // Nothing at all yet (not just a filter or search with no hits): one calm, centred empty state, no reader pane.
   const blank = !all.length && !S.query;
   $(".split")?.classList.toggle("is-empty", blank);
-  const counts = { new: all.filter((j) => j.new).length, matches: all.filter(isMatch).length, all: all.length, applied: all.filter((j) => j.applied).length };
+  const counts = { new: all.filter((j) => j.new).length, matches: all.filter((j) => isMatch(j) && !j.remote).length,
+    remote: all.filter((j) => isMatch(j) && j.remote).length, all: all.length, applied: all.filter((j) => j.applied).length };
   const tools = all.length ? `<div class="list-tools">${seg("filter",
-    FILTERS.map(([v, label]) => [v, `${esc(t(label))}<span class="seg-n">${counts[v]}</span>`]), S.filter)}</div>` : "";
+    filters().map(([v, label]) => [v, `<span class="seg-label">${esc(t(label))}</span><span class="seg-n">${counts[v]}</span>`]), S.filter)}</div>` : "";
   let body = "";
   if (!items.length) {
     body = emptyListHtml();
@@ -599,6 +603,11 @@ function emptyListHtml() {
   if (all.length && S.filter === "matches") {
     return `<div class="empty">${icon("tray", 40, "", 1.3)}<h2>${esc(t("No Strong Matches Yet"))}</h2>
       <p>${esc(t("{jobs} scored so far, none at {good} or above.", { jobs: count(all.length, "job"), good: C().summary.thresholds.good }))}</p>
+      <button class="btn large" data-filter-to="all">${esc(t("Show All Jobs"))}</button></div>`;
+  }
+  if (all.length && S.filter === "remote") {
+    return `<div class="empty">${icon("globe", 40, "", 1.3)}<h2>${esc(t("No Remote Matches Yet"))}</h2>
+      <p>${esc(t("Remote jobs that fit are listed here. They’re searched when the profile includes remote work."))}</p>
       <button class="btn large" data-filter-to="all">${esc(t("Show All Jobs"))}</button></div>`;
   }
   if (all.length && S.filter === "applied") {
@@ -653,6 +662,7 @@ function paintDetail(animate) {
   const pending = $("[data-fetch-description]", pane);
   if (pending) loadDescription(pending.dataset.fetchDescription);
   if (!item.apply && /linkedin\.com\/jobs\/view\//.test(item.url)) loadApplyType(item.url);
+  if (S.company[applyKey(item.url)] === undefined && $("#company-line", pane)) loadCompany(item.url);
   const frame = $("iframe", pane);
   if (frame) frame.addEventListener("load", () => fitFrame(frame));
 }
@@ -822,9 +832,38 @@ function applyHowHtml(j) {
 function jobEmailHtml(j) {
   const emails = j.emails || [];
   if (!emails.length || j.source === "demo") return `<div class="job-email" id="job-email" hidden></div>`;
-  return `<div class="job-email" id="job-email">${emails.map((m) => `<span class="job-email-item">
-      ${icon("envelope", 14, "", 1.8)}<a href="mailto:${esc(m)}" title="${esc(t("Write an email"))}" dir="ltr">${esc(m)}</a>
-      <button class="btn link-quiet" data-copy="${esc(m)}">${esc(t("Copy"))}</button></span>`).join("")}</div>`;
+  return `<div class="job-email" id="job-email">${emails.map(emailItem).join("")}</div>`;
+}
+
+/* The company's website and its HR / careers / contact addresses, found on the company's own site
+   (most postings don't give an address). Looked up when a job is opened, once per company. */
+const emailItem = (m) => `<span class="job-email-item">${icon("envelope", 14, "", 1.8)}<a href="mailto:${esc(m)}" title="${esc(t("Write an email"))}" dir="ltr">${esc(m)}</a>
+  <button class="btn link-quiet" data-copy="${esc(m)}">${esc(t("Copy"))}</button></span>`;
+function companyHtml(j) {
+  if (j.source === "demo") return "";
+  const info = S.company[applyKey(j.url)];
+  if (!info) {
+    return `<div class="job-email company-line" id="company-line" data-company="${esc(j.url)}"><span class="job-email-item muted">
+      <span class="spin"></span>${esc(t("Looking for the company’s email…"))}</span></div>`;
+  }
+  const emails = (info.emails || []).filter((m) => !(j.emails || []).includes(m));
+  if (!info.site && !emails.length) return `<div class="job-email company-line" id="company-line" data-company="${esc(j.url)}" hidden></div>`;
+  const host = (info.site || "").replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, "");
+  return `<div class="job-email company-line" id="company-line" data-company="${esc(j.url)}">
+    ${info.site ? `<span class="job-email-item">${icon("globe", 14, "", 1.8)}<a href="${esc(safeUrl(info.site))}" target="_blank" rel="noopener" dir="ltr"
+      title="${esc(t("The company’s website"))}">${esc(host)}</a></span>` : ""}
+    ${emails.map(emailItem).join("")}
+    ${info.site && !emails.length ? `<span class="job-email-item muted">${esc(t("No email on the company’s website"))}</span>` : ""}</div>`;
+}
+async function loadCompany(url) {
+  const id = applyKey(url);
+  if (S.company[id]) return;
+  S.company[id] = null;
+  let info = { site: "", emails: [] };
+  try { info = await api(`/api/company-contact/${enc(S.key)}?url=${enc(url)}`); } catch { /* nothing to show */ }
+  S.company[id] = info;
+  const job = (C().jobs || []).find((x) => x.url === url), holder = $(`#company-line[data-company="${CSS.escape(url)}"]`);
+  if (job && holder) holder.outerHTML = companyHtml(job);
 }
 
 /* The main button: apply the way this job is applied to. Opening the posting is its own button. */
@@ -962,6 +1001,7 @@ function jobDetail(j) {
     </div>
     ${applyHowHtml(j)}
     ${jobEmailHtml(j)}
+    ${companyHtml(j)}
     <dl class="facts">${facts.map(([k, v]) => `<div><dt>${esc(t(k))}</dt><dd>${bd(v)}</dd></div>`).join("")}</dl>
     ${aboutHtml(j)}
     ${whyHtml(j)}

@@ -415,6 +415,10 @@ select.field, select.ed { appearance: none; padding-inline-end: 28px; cursor: po
 .btn.link-quiet { height: auto; padding: 0 2px; box-shadow: none; color: var(--ink-3); font-size: 12.5px; }
 .btn.link-quiet:hover:not(:disabled) { background: transparent; color: var(--ink); }
 .btn.link-quiet.copied { color: var(--green); }
+.job-email + .company-line { margin-top: 6px; }
+.job-email-item.muted { color: var(--ink-3); font-size: 12.5px; }
+.job-email-item .spin { width: 11px; height: 11px; border-width: 1.5px; }
+.seg-label { max-width: 92px; overflow: hidden; text-overflow: ellipsis; }
 
 /* the CV menu: one button, the format chosen underneath */
 .menu.cv-menu { min-width: 220px; }

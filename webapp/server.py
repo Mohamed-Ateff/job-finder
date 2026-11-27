@@ -40,7 +40,6 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
-import apply_kit  # noqa: E402
 import cv_import  # noqa: E402
 import job_automation as ja  # noqa: E402
 import cv_pdf  # noqa: E402
@@ -401,7 +400,7 @@ def job_rows(c: ja.Candidate) -> list[dict]:
             continue
         d = details.get(url, {})
         description = (d.get("description") or "") if len(d.get("description") or "") >= 150 else fetched.get(url, "")
-        how, apply_to = apply_type(c, {**d, "url": url, "description": description}, known_apply)
+        how, emails = apply_type(c, {**d, "url": url, "description": description}, known_apply)
         track, secondary = d.get("selected_track"), d.get("secondary_track")
         title = seen.get("title") or d.get("title", "")
         company = seen.get("company") or d.get("company", "")
@@ -439,7 +438,7 @@ def job_rows(c: ja.Candidate) -> list[dict]:
             "reasoning": d.get("reasoning"),
             "description": description,
             "apply": how,
-            "apply_email": apply_to,
+            "emails": emails,
             "breakdown": d.get("breakdown"),
             "has_cv": bool(d.get("cv")),
         })
@@ -840,15 +839,14 @@ def remember_posting(c: ja.Candidate, url: str, page: dict) -> None:
                 ja.write_json(description_file(c), cache)
 
 
-def apply_type(c: ja.Candidate, job: dict, known: dict | None = None) -> tuple[str, str]:
-    """(type, email) for a job: what its search saw, what was learnt later, or an address in
-    the posting itself ("Send your CV to ...")."""
+def apply_type(c: ja.Candidate, job: dict, known: dict | None = None) -> tuple[str, list[str]]:
+    """(type, emails) for a job: what its search saw or was learnt later - or "email" when the posting
+    asks for CVs by email - and every email address in the posting (the one for CVs first)."""
     kind = (known if known is not None else read_json(apply_file(c), {}) or {}).get(job["url"]) or job.get("apply") or ""
-    email = job.get("apply_email", "") if kind in ("", "email", "site") else ""
-    if not email and kind in ("", "site"):
-        email = ja.apply_email(job.get("description", ""))
-    return ("email" if email else kind), email
-
+    emails = ja.job_emails(f"{job.get('apply_email', '')} {job.get('description', '')}")
+    if kind in ("", "site") and (job.get("apply_email") or ja.apply_email(job.get("description", ""))):
+        kind = "email"
+    return kind, emails
 
 class ApplyChecks:
     """Older LinkedIn jobs, saved before the app noted how they're applied to, are asked once each,
@@ -903,37 +901,17 @@ def check_apply_type(key: str, url: str):
     job = job_detail(c, url)
     if not job:
         raise HTTPException(404, "Unknown job")
-    kind, email = apply_type(c, job)
+    if len(job.get("description") or "") < 150:
+        job["description"] = (read_json(description_file(c), {}) or {}).get(url, job.get("description", ""))
+    kind, emails = apply_type(c, job)
     if not kind and "linkedin.com/jobs/view/" in url and not demo_on():
         page = ja.fetch_posting(url)
         if page:
             remember_posting(c, url, page)
-            if not job.get("description") and page.get("description"):
+            if len(job.get("description") or "") < 150 and page.get("description"):
                 job["description"] = page["description"]
-            kind, email = apply_type(c, job)
-    return {"apply": kind, "apply_email": email}
-
-
-@app.get("/api/apply-kit/{key}")
-def apply_kit_for(key: str, url: str):
-    """Everything to apply to one job quickly: form answers, a cover note, the email subject."""
-    c = candidate(key)
-    job = job_detail(c, url)
-    if not job:
-        raise HTTPException(404, "Unknown job")
-    if len(job.get("description") or "") < 150:
-        job["description"] = (read_json(description_file(c), {}) or {}).get(url, job.get("description", ""))
-    prof, _ = profile_data(c)
-    with _cv_lock:
-        previous = ja.CANDIDATE
-        ja.CANDIDATE = c
-        try:
-            cv = guarded_cv(c, job)
-        finally:
-            ja.CANDIDATE = previous
-    kind, email = apply_type(c, job)
-    return {"answers": apply_kit.answers(prof, cv), "note": apply_kit.cover_note(prof, job, cv),
-            "subject": apply_kit.email_subject(prof, job), "apply": kind, "apply_email": email}
+            kind, emails = apply_type(c, job)
+    return {"apply": kind, "emails": emails}
 
 
 # ------------------------------------------------------------------ email --

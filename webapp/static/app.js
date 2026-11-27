@@ -208,7 +208,7 @@ const VIEWS = {
   guide: { title: "How It Works", tab: "Guide", icon: "book", kind: "page", needs: ["profile"] },
 };
 const ROUTE_ALIASES = { matches: "jobs", digests: "jobs", setup: "profile" };   // old links still land somewhere sensible
-const FILTERS = [["matches", "Matches"], ["easy", "Easy Apply"], ["all", "All"], ["applied", "Applied"]];
+const FILTERS = [["matches", "Matches"], ["all", "All"], ["applied", "Applied"]];
 const VERDICT = { strong: "Strong", good: "Good", moderate: "Moderate", weak: "Weak" };
 const MODES = {
   dry: { label: "Preview", start: "Start Preview",
@@ -234,7 +234,7 @@ const S = {
   candidates: [], key: store.get("candidate", null), view: "jobs", appearance: store.get("appearance", "auto"),
   cache: {}, sel: {}, query: "", filter: "matches", forms: {}, runs: {}, finishedAt: {}, poll: null, token: 0,
   expanded: null, trackOpen: null, detailOpen: false, booted: false, painted: "", before: {},
-  kits: {}, notes: {}, applying: null,
+  applying: null,
 };
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 const cand = () => S.candidates.find((c) => c.key === S.key) || S.candidates[0];
@@ -268,8 +268,8 @@ function watchApplyChecks(key) {
     for (const job of jobs) {
       const f = fresh.get(job.url);
       if (f && f.apply && f.apply !== job.apply) {
-        if (key === S.key) setApply(job, f.apply, f.apply_email);
-        else { job.apply = f.apply; job.apply_email = f.apply_email; }
+        if (key === S.key) setApply(job, f.apply, f.emails);
+        else { job.apply = f.apply; job.emails = f.emails; }
       }
     }
     if (r.checking_apply) watchApplyChecks(key);
@@ -525,14 +525,9 @@ function paintMain(quiet) {
 }
 
 /* =============================================================== lists */
-const isMatch = (j) => j.verdict === "strong" || j.verdict === "good";
-/* Quick to apply to and worth it: Easy Apply or by email, not applied yet, at least a partial fit. */
-const isQuick = (j) => (j.apply === "easy" || j.apply === "email") && !j.applied && j.verdict !== "weak";
-function jobsFor() {
+const isMatch = (j) => j.verdict === "strong" || j.verdict === "good";function jobsFor() {
   let rows = C().jobs || [];
-  if (S.filter === "matches") rows = rows.filter(isMatch);
-  else if (S.filter === "easy") rows = rows.filter(isQuick);
-  else if (S.filter === "applied") rows = rows.filter((j) => j.applied);
+  if (S.filter === "matches") rows = rows.filter(isMatch);  else if (S.filter === "applied") rows = rows.filter((j) => j.applied);
   const q = S.query.trim().toLowerCase();
   if (q) rows = rows.filter((j) => `${j.title} ${j.company} ${j.location} ${j.track_name}`.toLowerCase().includes(q));
   // The latest search's jobs first, best score first; everything older below, as before.
@@ -550,8 +545,7 @@ function paintList(quiet) {
   // Nothing at all yet (not just a filter or search with no hits): one calm, centred empty state, no reader pane.
   const blank = !all.length && !S.query;
   $(".split")?.classList.toggle("is-empty", blank);
-  const counts = { new: all.filter((j) => j.new).length, matches: all.filter(isMatch).length, all: all.length,
-    easy: all.filter(isQuick).length, applied: all.filter((j) => j.applied).length };
+  const counts = { new: all.filter((j) => j.new).length, matches: all.filter(isMatch).length, all: all.length, applied: all.filter((j) => j.applied).length };
   const tools = all.length ? `<div class="list-tools">${seg("filter",
     FILTERS.map(([v, label]) => [v, `${esc(t(label))}<span class="seg-n">${counts[v]}</span>`]), S.filter)}</div>` : "";
   let body = "";
@@ -607,11 +601,6 @@ function emptyListHtml() {
       <p>${esc(t("{jobs} scored so far, none at {good} or above.", { jobs: count(all.length, "job"), good: C().summary.thresholds.good }))}</p>
       <button class="btn large" data-filter-to="all">${esc(t("Show All Jobs"))}</button></div>`;
   }
-  if (all.length && S.filter === "easy") {
-    return `<div class="empty">${icon("checkCircle", 40, "", 1.3)}<h2>${esc(t("No Easy Apply Jobs Yet"))}</h2>
-      <p>${esc(t("Jobs you can apply to in a few minutes (Easy Apply, or by email) are listed here."))}</p>
-      <button class="btn large" data-filter-to="matches">${esc(t("Show Matches"))}</button></div>`;
-  }
   if (all.length && S.filter === "applied") {
     return `<div class="empty">${icon("checkCircle", 40, "", 1.3)}<h2>${esc(t("Nothing Applied Yet"))}</h2>
       <p>${esc(t("After you apply for a job, press Mark as Applied on it. It will be listed here, so you never apply twice."))}</p></div>`;
@@ -662,8 +651,6 @@ function paintDetail(animate) {
   pane.scrollTop = 0;
   const pending = $("[data-fetch-description]", pane);
   if (pending) loadDescription(pending.dataset.fetchDescription);
-  if (!S.kits[applyKey(item.url)] && $("#kit", pane)) loadKit(item.url);
-  else growNote();
   if (!item.apply && /linkedin\.com\/jobs\/view\//.test(item.url)) loadApplyType(item.url);
   const frame = $("iframe", pane);
   if (frame) frame.addEventListener("load", () => fitFrame(frame));
@@ -809,12 +796,12 @@ async function loadDescription(url) {
 const meterRow = (label, value, hint) => `<div class="meter-row" title="${esc(t(hint))}"><span>${esc(t(label))}</span>
   <i class="bar"><i style="width:${Math.max(0, Math.min(100, Number(value) || 0))}%"></i></i><b>${esc(value ?? "–")}</b></div>`;
 
-/* ======================================================= applying faster */
+/* ============================================================ applying */
 /* How a job is applied to, as the search (or a later look at LinkedIn) found it. */
 const APPLY = {
   easy: { name: "Easy Apply", line: "A few minutes on {site} with your saved profile." },
-  email: { name: "Apply by email", line: "Send the CV to {to}. The email is written for you below." },
-  site: { name: "Company site", line: "On the employer’s own site, usually a longer form. The answers below save the typing." },
+  email: { name: "Apply by email", line: "The posting asks for CVs by email." },
+  site: { name: "Company site", line: "On the employer’s own site, usually a longer form." },
   closed: { name: "Closed", line: "{site} no longer takes applications for this job." },
 };
 const isEasy = (j) => j.apply === "easy" || j.apply === "email";
@@ -823,67 +810,48 @@ const applyKey = (url) => `${S.key}|${url}`;
 function applyHowHtml(j) {
   const how = APPLY[j.apply];
   if (!how || j.source === "demo") return `<p class="apply-how" id="apply-how" hidden></p>`;
-  const line = t(how.line, { site: bd(siteName(j.source)), to: `<bdi>${esc(j.apply_email || "")}</bdi>` });
+  const line = t(how.line, { site: bd(siteName(j.source)) });
   return `<p class="apply-how${isEasy(j) ? " is-easy" : ""}" id="apply-how"><b>${esc(t(how.name))}</b> · ${line}</p>`;
 }
 
+/* The email addresses in the posting: click one to write to it, or copy it. */
+function jobEmailHtml(j) {
+  const emails = j.emails || [];
+  if (!emails.length || j.source === "demo") return `<div class="job-email" id="job-email" hidden></div>`;
+  return `<div class="job-email" id="job-email">${emails.map((m) => `<span class="job-email-item">
+      ${icon("envelope", 14, "", 1.8)}<a href="mailto:${esc(m)}" title="${esc(t("Write an email"))}" dir="ltr">${esc(m)}</a>
+      <button class="btn link-quiet" data-copy="${esc(m)}">${esc(t("Copy"))}</button></span>`).join("")}</div>`;
+}
+
+/* The main button: apply the way this job is applied to. Opening the posting is its own button. */
 function applyBtnHtml(j) {
   const site = bd(siteName(j.source));
   if (j.source === "demo") {
     return `<button class="btn primary" id="apply-btn" disabled title="${esc(t("Demo Mode uses sample jobs, so there is no real posting"))}">${esc(t("Sample Posting"))}</button>`;
   }
-  if (j.apply === "closed") {
-    return `<a class="btn" id="apply-btn" href="${esc(safeUrl(j.url))}" target="_blank" rel="noopener">${t("View on {site}", { site })} ${icon("external", 12, "flip", 2.2)}</a>`;
-  }
-  if (j.apply === "email") {
-    return `<button class="btn primary" id="apply-btn" data-action="apply" data-url="${esc(j.url)}">${icon("envelope", 14, "", 1.9)} ${esc(t("Email Application"))}</button>`;
+  if (j.apply === "closed") return `<span id="apply-btn" hidden></span>`;
+  if (j.apply === "email" && j.emails?.length) {
+    return `<a class="btn primary" id="apply-btn" data-action="apply" data-url="${esc(j.url)}" href="mailto:${esc(j.emails[0])}">${icon("envelope", 14, "", 1.9)} ${esc(t("Apply by Email"))}</a>`;
   }
   const label = j.apply === "easy" ? t("Easy Apply on {site}", { site }) : t("Apply on {site}", { site });
-  return `<a class="btn primary" id="apply-btn" data-action="apply" data-url="${esc(j.url)}" href="${esc(safeUrl(j.url))}" target="_blank" rel="noopener">${label} ${icon("external", 12, "flip", 2.2)}</a>`;
+  return `<a class="btn primary" id="apply-btn" data-action="apply" data-url="${esc(j.url)}" href="${esc(safeUrl(j.url))}" target="_blank" rel="noopener">${label}</a>`;
 }
 
-/* The answers, cover note and one-click form filling for one job: everything to paste while applying. */
-function kitHtml(j) {
-  const kit = S.kits[applyKey(j.url)];
-  if (!kit) return `<section class="d-section kit" id="kit" data-kit="${esc(j.url)}"><h3>${esc(t("Ready to Apply"))}</h3>
-    <p class="d-note"><span class="spin"></span> ${esc(t("Writing the cover note…"))}</p></section>`;
-  if (kit.error) return `<section class="d-section kit" id="kit"><h3>${esc(t("Ready to Apply"))}</h3><p class="d-note">${esc(t(kit.error))}</p></section>`;
-  const note = S.notes[applyKey(j.url)] ?? kit.note;
-  const answers = kit.answers.map((a) => `<button class="answer" data-copy="${esc(a.value)}" title="${esc(t("Copy"))}">
-      <span class="answer-k">${esc(t(a.label))}</span><span class="answer-v" dir="auto">${esc(a.value)}</span>
-      <span class="answer-i">${icon("copy", 14, "", 1.7)}</span></button>`).join("");
-  const fill = Object.fromEntries(kit.answers.map((a) => [a.key, a.value]));
-  return `<section class="d-section kit" id="kit" data-kit="${esc(j.url)}">
-    <h3>${esc(t("Ready to Apply"))}</h3>
-    <div class="kit-head"><span class="kit-title">${esc(t("Cover note"))}</span>
-      <span class="kit-tools">${j.apply === "email" && kit.apply_email ? `<a class="btn" href="${esc(mailtoHref(kit, note))}">${icon("envelope", 14, "", 1.8)} ${esc(t("Open in Email"))}</a>` : ""}
-      <button class="btn" data-action="copy-note">${icon("copy", 14, "", 1.8)} ${esc(t("Copy"))}</button></span></div>
-    <textarea class="field kit-note" id="kit-note" data-note="${esc(j.url)}" dir="ltr" spellcheck="true" rows="12">${esc(note)}</textarea>
-    <p class="kit-hint">${esc(t("Written from the profile and the CV points that match this job. Read it and change anything before sending."))}</p>
-    ${answers ? `<div class="kit-head"><span class="kit-title">${esc(t("For the application form"))}</span><span class="kit-sub">${esc(t("Click a line to copy it"))}</span></div>
-      <div class="answers">${answers}</div>` : ""}
-    ${answers ? `<div class="kit-fill"><div><span class="kit-title">${esc(t("Fill forms in one click"))}</span>
-        <p class="kit-hint">${esc(t("Drag this button to the bookmarks bar once. On any employer’s application form, click it there: the empty fields it recognises are filled in. Then add the CV and check everything."))}</p></div>
-      <a class="btn bookmarklet" data-action="bookmarklet" draggable="true" href="${esc(bookmarklet(fill))}">${icon("wrench", 14, "", 1.8)} ${esc(t("Fill as {name}", { name: (fill.first || first()) }))}</a></div>` : ""}
-  </section>`;
-}
-
-const growNote = () => { const n = $("#kit-note"); if (n) autoGrow(n); };   // the whole note shows, no inner scrolling
-
-function mailtoHref(kit, note) {
-  return `mailto:${encodeURIComponent(kit.apply_email)}?subject=${encodeURIComponent(kit.subject)}&body=${encodeURIComponent(note)}`;
-}
-
-async function loadKit(url) {
-  const id = applyKey(url);
-  if (S.kits[id] && !S.kits[id].error) return S.kits[id];
-  try { S.kits[id] = await api(`/api/apply-kit/${enc(S.key)}?url=${enc(url)}`); }
-  catch (err) { S.kits[id] = { error: err.message === "auth" ? "Sign in again to see this." : "The cover note couldn’t be written. Open the job again to retry." }; }
-  const job = (C().jobs || []).find((x) => x.url === url);
-  if (job && S.kits[id].apply && S.kits[id].apply !== job.apply) setApply(job, S.kits[id].apply, S.kits[id].apply_email);
-  const holder = $(`#kit[data-kit="${CSS.escape(url)}"]`);
-  if (holder && job) { holder.outerHTML = kitHtml(job); growNote(); }
-  return S.kits[id];
+/* One CV button; the format is chosen from a small menu under it. */
+function openCvMenu(anchor) {
+  const open = $(".menu.cv-menu");
+  closeFloating();
+  if (open) return;
+  const href = anchor.dataset.cv;
+  const menu = document.createElement("div");
+  menu.className = "menu cv-menu";
+  menu.setAttribute("role", "menu");
+  menu.innerHTML = [["pdf", "PDF", "Best for applying online"], ["docx", "Word", "To edit before sending"]].map(([f, name, sub]) =>
+    `<a role="menuitem" href="${esc(f === "pdf" ? `${href}&format=pdf` : href)}" download data-cv-format>
+      <span class="file-tag">${f === "pdf" ? "PDF" : "DOC"}</span>
+      <span class="account-text"><span class="account-name">${esc(t(name))}</span><span class="account-sub">${esc(t(sub))}</span></span></a>`).join("");
+  document.body.append(menu);
+  placeBelow(menu, anchor, "start");
 }
 
 /* An older LinkedIn job saved before the app noted how it's applied to: ask now, once. */
@@ -894,45 +862,34 @@ async function loadApplyType(url) {
   try {
     const r = await api(`/api/apply-type/${enc(S.key)}?url=${enc(url)}`);
     const job = (C().jobs || []).find((x) => x.url === url);
-    if (job && r.apply) setApply(job, r.apply, r.apply_email);
+    if (job && r.apply) setApply(job, r.apply, r.emails);
   } catch { /* stays unknown */ }
 }
 
 /* A job's apply type changed: update its row and, if it's open, the line and the button in place. */
-function setApply(job, kind, email) {
+function setApply(job, kind, emails) {
   job.apply = kind;
-  job.apply_email = email || "";
+  if (emails) job.emails = emails;
   if (S.view === "jobs") paintList(true);
   if (S.sel[S.view] !== job.url) return;
-  const how = $("#apply-how"), btn = $("#apply-btn");
-  if (how) how.outerHTML = applyHowHtml(job);
-  if (btn) btn.outerHTML = applyBtnHtml(job);
-  const kit = $(`#kit[data-kit="${CSS.escape(job.url)}"]`);
-  if (kit && S.kits[applyKey(job.url)] && !kit.contains(document.activeElement)) { kit.outerHTML = kitHtml(job); growNote(); }
+  for (const [id, html] of [["#apply-how", applyHowHtml], ["#apply-btn", applyBtnHtml], ["#job-email", jobEmailHtml]]) {
+    const el = $(id);
+    if (el) el.outerHTML = html(job);
+  }
 }
 
-/* Apply: the posting opens (or the email, for jobs that take CVs by email), the CV for this job
-   downloads as a PDF ready to attach, and the cover note and answers are shown to copy from.
-   Coming back to the app afterwards asks whether to mark the job as applied. */
-async function startApply(btn, e) {
-  const url = btn.dataset.url;
-  const job = (C().jobs || []).find((x) => x.url === url);
+/* Apply: the posting opens (or an email to the address in it), and the CV for this job downloads as
+   a PDF, ready to attach. Coming back to the app afterwards asks whether to mark the job as applied. */
+function startApply(btn) {
+  const job = (C().jobs || []).find((x) => x.url === btn.dataset.url);
   if (!job) return;
   if (job.cv_url) {
-    const a = document.createElement("a");
-    a.href = `${job.cv_url}&format=pdf`;
-    a.download = "";
+    const a = Object.assign(document.createElement("a"), { href: `${job.cv_url}&format=pdf`, download: "" });
     document.body.append(a);
     a.click();
     a.remove();
   }
-  S.applying = { key: S.key, url, at: Date.now() };
-  if (job.apply === "email") {
-    e.preventDefault();
-    const kit = await loadKit(url);
-    if (kit && !kit.error && kit.apply_email) location.href = mailtoHref(kit, S.notes[applyKey(url)] ?? kit.note);
-  }
-  $("#kit")?.scrollIntoView({ behavior: reduceMotion.matches ? "auto" : "smooth", block: "start" });
+  S.applying = { key: S.key, url: job.url, at: Date.now() };
 }
 
 function askApplied() {
@@ -947,7 +904,7 @@ function askApplied() {
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") askApplied(); });
 window.addEventListener("focus", askApplied);
 
-/* Copy text, and show it on the thing clicked (a tick for a moment) rather than with a big notice. */
+/* Copy text, and show it on the thing clicked for a moment rather than with a big notice. */
 async function copyText(text, el) {
   try { await navigator.clipboard.writeText(text); }
   catch {
@@ -957,96 +914,11 @@ async function copyText(text, el) {
     if (!ok) return banner(t("Select the text and copy it by hand."));
   }
   if (!el) return hud("Copied", "check");
+  const label = el.textContent;
+  el.textContent = t("Copied");
   el.classList.add("copied");
   clearTimeout(el._copied);
-  el._copied = setTimeout(() => el.classList.remove("copied"), 1400);
-}
-
-/* The "Fill as …" bookmark. It runs on an employer's application page, not in this app, so it is
-   self-contained: it fills only empty fields it recognises (by label, name, placeholder or
-   autocomplete), the way a person typing would (so the page's own checks see it), and says how many. */
-function fillForm(D) {
-  const RULES = [
-    ["email", /e-?mail|البريد/i],
-    ["first", /first.?name|given.?name|fore.?name|\bfname\b|الاسم.?الأول/i],
-    ["last", /last.?name|family.?name|sur.?name|\blname\b|اسم.?العائلة|الاسم.?الأخير/i],
-    ["linkedin", /linked.?in/i],
-    ["website", /website|portfolio|personal.?(site|url|page)|^url$/i],
-    ["phone", /phone|mobile|\btel\b|telephone|\bcell|whats.?app|الجوال|الهاتف|الموبايل|رقم.?الهاتف/i],
-    ["company", /(current|recent|present|last).{0,12}(company|employer|organi[sz]ation)|company.?name|^employer|جهة.?العمل/i],
-    ["title", /(current|recent|present|last).{0,12}(title|position|role|designation)|job.?title|headline|المسمى/i],
-    ["years", /years?.{0,15}experience|experience.{0,15}years?|سنوات.?الخبرة/i],
-    ["notice", /notice|availab|start.?date|earliest.?start|فترة.?الإشعار/i],
-    ["salary", /salary|compensation|expected.?(pay|ctc)|\bctc\b|الراتب/i],
-    ["nationality", /nationality|citizenship|الجنسية/i],
-    ["city", /^city$|\bcity\b|town|المدينة/i],
-    ["name", /full.?name|^name$|^your.?name|candidate.?name|legal.?name|^الاسم$|الاسم.?الكامل/i],
-  ];
-  const AUTO = { "given-name": "first", "family-name": "last", name: "name", email: "email", tel: "phone", "tel-national": "phone",
-    "address-level2": "city", organization: "company", "organization-title": "title", url: "website" };
-  const clean = (s) => String(s || "").replace(/[*:]/g, " ").replace(/\s+/g, " ").trim();
-  const keyFor = (el, doc) => {
-    const auto = (el.getAttribute("autocomplete") || "").split(" ").pop();
-    if (AUTO[auto] && D[AUTO[auto]]) return AUTO[auto];
-    const labels = [...(el.labels || [])].map((l) => l.textContent);
-    const by = (el.getAttribute("aria-labelledby") || "").split(" ").map((id) => doc.getElementById(id)?.textContent);
-    const hints = [...labels, el.getAttribute("aria-label"), ...by, el.placeholder, el.name, el.id, el.getAttribute("data-automation-id")]
-      .map(clean).filter(Boolean);
-    for (const h of hints) for (const [k, rx] of RULES) if (rx.test(h) && D[k]) return k;
-    return "";
-  };
-  const put = (el, value) => {
-    const win = el.ownerDocument.defaultView;
-    const proto = el.tagName === "TEXTAREA" ? win.HTMLTextAreaElement.prototype : win.HTMLInputElement.prototype;
-    el.focus();
-    Object.getOwnPropertyDescriptor(proto, "value").set.call(el, value);
-    el.dispatchEvent(new win.Event("input", { bubbles: true }));
-    el.dispatchEvent(new win.Event("change", { bubbles: true }));
-    el.blur();
-  };
-  const docs = [document];
-  document.querySelectorAll("iframe").forEach((f) => { try { if (f.contentDocument) docs.push(f.contentDocument); } catch (e) { /* another site's frame */ } });
-  let n = 0;
-  for (const doc of docs) {
-    for (const el of doc.querySelectorAll("input, select")) {
-      const type = (el.type || "text").toLowerCase();
-      if (el.disabled || el.readOnly || !el.getClientRects().length) continue;
-      if (el.tagName === "INPUT" && !["text", "email", "tel", "url", "number", "search"].includes(type)) continue;
-      if (el.value && el.value.trim()) continue;
-      const k = keyFor(el, doc);
-      if (!k) continue;
-      let value = String(D[k]);
-      if (el.tagName === "SELECT") {
-        const low = value.toLowerCase();
-        const opt = [...el.options].find((o) => o.text.trim().toLowerCase() === low)
-          || [...el.options].find((o) => o.value && o.text.trim().toLowerCase().startsWith(low));
-        if (!opt) continue;
-        el.value = opt.value;
-        el.dispatchEvent(new (el.ownerDocument.defaultView.Event)("change", { bubbles: true }));
-      } else {
-        if (type === "number") value = (value.match(/\d+/) || [""])[0];
-        if (!value) continue;
-        put(el, value);
-      }
-      const before = el.style.outline;
-      el.style.outline = "2px solid #2f7a4d";
-      setTimeout(() => { el.style.outline = before; }, 2500);
-      n += 1;
-    }
-  }
-  const box = document.createElement("div");
-  box.textContent = n ? `Filled ${n} field${n === 1 ? "" : "s"}. Check them, then add the CV.` : "No empty fields here match the profile.";
-  Object.assign(box.style, { position: "fixed", zIndex: "2147483647", top: "16px", right: "16px", padding: "10px 14px",
-    borderRadius: "8px", background: "#1b1a17", color: "#faf9f6", font: "500 14px/1.4 system-ui, sans-serif",
-    boxShadow: "0 8px 30px rgba(0,0,0,.25)" });
-  document.body.append(box);
-  setTimeout(() => box.remove(), 4500);
-}
-const FILL_KEYS = ["name", "first", "last", "email", "phone", "city", "nationality", "linkedin", "website", "title", "company",
-  "years", "notice", "salary"];
-function bookmarklet(fill) {
-  const data = Object.fromEntries(FILL_KEYS.filter((k) => fill[k]).map((k) => [k, fill[k]]));
-  return `javascript:${encodeURIComponent(`(${fillForm.toString()})(${JSON.stringify(data)})`)}`;
+  el._copied = setTimeout(() => { el.textContent = label; el.classList.remove("copied"); }, 1400);
 }
 
 function jobDetail(j) {
@@ -1074,8 +946,8 @@ function jobDetail(j) {
     </div>
     <div class="d-actions">
       ${applyBtnHtml(j)}
-      ${cvHref ? `<a class="btn" href="${cvHref}" download>${icon("download", 14, "", 1.9)} ${esc(t("Download CV"))}</a>
-        <a class="btn" href="${cvHref}&format=pdf" download>${esc(t("PDF"))}</a>` : ""}
+      ${j.source === "demo" ? "" : `<a class="btn" href="${esc(safeUrl(j.url))}" target="_blank" rel="noopener">${esc(t("Open Job"))} ${icon("external", 12, "flip", 2.2)}</a>`}
+      ${cvHref ? `<button class="btn" data-action="cv-menu" data-cv="${esc(cvHref)}" aria-haspopup="menu">${icon("download", 14, "", 1.9)} ${esc(t("Download CV"))} ${icon("updown", 11, "", 2)}</button>` : ""}
       ${j.source === "demo" ? "" : `<button class="btn" data-action="email-job" data-url="${esc(j.url)}">${icon("envelope", 14, "", 1.8)} ${esc(t("Email Me"))}</button>`}
       <span class="d-icons">
         <button class="icon-btn applied-btn${j.applied ? " on" : ""}" data-applied="${esc(j.url)}" aria-pressed="${Boolean(j.applied)}"
@@ -1084,10 +956,10 @@ function jobDetail(j) {
       </span>
     </div>
     ${applyHowHtml(j)}
+    ${jobEmailHtml(j)}
     <dl class="facts">${facts.map(([k, v]) => `<div><dt>${esc(t(k))}</dt><dd>${bd(v)}</dd></div>`).join("")}</dl>
     ${aboutHtml(j)}
     ${whyHtml(j)}
-    ${j.apply === "closed" ? "" : kitHtml(j)}
   </article>`;
 }
 
@@ -1839,7 +1711,6 @@ function flushSave() {
 async function saveProfile(key, form) {
   try {
     const v = await api(`/api/profile/${enc(key)}`, { method: "POST", body: { profile: form } });
-    Object.keys(S.kits).filter((id) => id.startsWith(`${key}|`)).forEach((id) => delete S.kits[id]);   // answers come from the profile
     const cache = S.cache[key];
     if (cache) {
       cache.profile = v;
@@ -2030,7 +1901,8 @@ document.addEventListener("click", async (e) => {
     setSeg(group, segBtn.dataset.value);
     return onSeg(group.dataset.seg, segBtn.dataset.value);
   }
-  if (!el.closest(".menu, .popover, [data-action='account'], [data-action='activity']")) closeFloating();
+  if (el.closest("[data-cv-format]")) return setTimeout(closeFloating);     // the download goes ahead, then the menu closes
+  if (!el.closest(".menu, .popover, [data-action='account'], [data-action='activity'], [data-action='cv-menu']")) closeFloating();
 
   const action = el.closest("[data-action]")?.dataset.action;
   if (action === "account") return openAccountMenu(el.closest("[data-action]"));
@@ -2066,15 +1938,8 @@ document.addEventListener("click", async (e) => {
     try { await navigator.clipboard.writeText(S.mail?.script || ""); hud("Copied", "check"); } catch { banner(t("Select the script and copy it by hand.")); }
     return;
   }
-  if (action === "apply") return startApply(el.closest("[data-action]"), e);
-  if (action === "bookmarklet") {                // it works from the bookmarks bar, on the employer's page
-    e.preventDefault();
-    return hud("Drag it to the bookmarks bar", "arrowR");
-  }
-  if (action === "copy-note") {
-    const note = $("#kit-note");
-    return copyText(note?.value || "", el.closest("button"));
-  }
+  if (action === "apply") return startApply(el.closest("[data-action]"));
+  if (action === "cv-menu") return openCvMenu(el.closest("[data-action]"));
   if (action === "email-job") {
     const btn = el.closest("button");
     btn.disabled = true;
@@ -2389,13 +2254,6 @@ document.addEventListener("submit", async (e) => {
 
 document.addEventListener("input", (e) => {
   const el = e.target;
-  if (el.dataset?.note !== undefined) {               // the cover note, as changed, is what's copied and emailed
-    S.notes[applyKey(el.dataset.note)] = el.value;
-    autoGrow(el);
-    const kit = S.kits[applyKey(el.dataset.note)], mail = el.closest("#kit")?.querySelector('a[href^="mailto:"]');
-    if (mail && kit) mail.href = mailtoHref(kit, el.value);
-    return;
-  }
   if (el.dataset?.f !== undefined && S.form) {
     setPath(S.form, el.dataset.f, fieldValue(el));
     if (el.tagName === "TEXTAREA") autoGrow(el);

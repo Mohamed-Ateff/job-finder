@@ -77,32 +77,16 @@ window.AR = {
   "Sample Posting": "إعلان تجريبي", "Demo Mode uses sample jobs, so there is no real posting": "يستخدم الوضع التجريبي وظائف تجريبية، فلا يوجد إعلان حقيقي",
   "Apply on {site}": "قدّم عبر {site}", "Download CV": "تنزيل السيرة الذاتية", "Mark as Applied": "وضع علامة التقديم",
 
-  // applying faster
+  // applying
   "Easy Apply": "تقديم سريع", "Apply by email": "التقديم بالبريد", "Company site": "موقع الشركة", "Closed": "مغلقة",
   "A few minutes on {site} with your saved profile.": "دقائق قليلة على {site} بملفك المحفوظ هناك.",
-  "Send the CV to {to}. The email is written for you below.": "أرسل السيرة الذاتية إلى {to}. نص الرسالة جاهز في الأسفل.",
-  "On the employer’s own site, usually a longer form. The answers below save the typing.":
-    "على موقع جهة العمل نفسها، وغالباً بنموذج أطول. الإجابات في الأسفل توفّر عليك الكتابة.",
+  "The posting asks for CVs by email.": "يطلب الإعلان إرسال السيرة الذاتية بالبريد.",
+  "On the employer’s own site, usually a longer form.": "على موقع جهة العمل نفسها، وغالباً بنموذج أطول.",
   "{site} no longer takes applications for this job.": "لم يعد {site} يستقبل طلبات لهذه الوظيفة.",
-  "Easy Apply on {site}": "تقديم سريع عبر {site}", "View on {site}": "عرض على {site}", "Email Application": "أرسل الطلب بالبريد",
-  "Ready to Apply": "جاهز للتقديم", "Writing the cover note…": "جارٍ كتابة خطاب التقديم…", "Cover note": "خطاب التقديم",
-  "Open in Email": "افتح في البريد",
-  "Written from the profile and the CV points that match this job. Read it and change anything before sending.":
-    "مكتوب من الملف المهني ومن نقاط السيرة الذاتية الأقرب لهذه الوظيفة. اقرأه وعدّل ما تشاء قبل الإرسال.",
-  "For the application form": "لنموذج التقديم", "Click a line to copy it": "اضغط على أي سطر لنسخه",
-  "Fill forms in one click": "املأ النماذج بضغطة واحدة",
-  "Drag this button to the bookmarks bar once. On any employer’s application form, click it there: the empty fields it recognises are filled in. Then add the CV and check everything.":
-    "اسحب هذا الزر إلى شريط الإشارات المرجعية مرة واحدة. وفي أي نموذج تقديم لدى جهة عمل، اضغط عليه هناك: تُملأ الحقول الفارغة التي يتعرّف عليها. ثم أرفق السيرة الذاتية وراجع كل شيء.",
-  "Fill as {name}": "املأ باسم {name}", "Drag it to the bookmarks bar": "اسحبه إلى شريط الإشارات المرجعية",
-  "Sign in again to see this.": "سجّل الدخول مرة أخرى لعرض هذا.",
-  "The cover note couldn’t be written. Open the job again to retry.": "تعذّرت كتابة خطاب التقديم. افتح الوظيفة مرة أخرى للمحاولة.",
+  "Easy Apply on {site}": "تقديم سريع عبر {site}", "Apply by Email": "قدّم بالبريد", "Open Job": "افتح الوظيفة",
+  "Write an email": "اكتب رسالة", "PDF": "PDF", "Word": "Word",
+  "Best for applying online": "الأنسب للتقديم عبر الإنترنت", "To edit before sending": "للتعديل قبل الإرسال",
   "Did you apply to {company}?": "هل قدّمت على {company}؟", "Select the text and copy it by hand.": "حدّد النص وانسخه يدوياً.",
-  "No Easy Apply Jobs Yet": "لا توجد وظائف بتقديم سريع بعد",
-  "Jobs you can apply to in a few minutes (Easy Apply, or by email) are listed here.":
-    "تظهر هنا الوظائف التي يمكنك التقديم عليها في دقائق (التقديم السريع أو بالبريد).",
-  "Show Matches": "عرض المطابقة",
-  "First name": "الاسم الأول", "Last name": "اسم العائلة", "Current title": "المسمى الحالي",
-  "Most recent employer": "آخر جهة عمل", "Residency / visa": "الإقامة / التأشيرة",
   "Click to clear the mark": "اضغط لإزالة العلامة", "Mark this job once you’ve sent your application": "ضع العلامة بعد إرسال طلبك",
   "About the Role": "عن الوظيفة", "Why It Fits": "لماذا تناسب", "Details": "التفاصيل",
   "Jobs that score below {n} are kept without a written summary.": "الوظائف التي تقل درجتها عن {n} تُحفظ دون ملخص مكتوب.",

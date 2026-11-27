@@ -737,6 +737,18 @@ def apply_email(description: str) -> str:
     return ""
 
 
+def job_emails(description: str, most: int = 3) -> list[str]:
+    """Every email address in a posting (the one it asks CVs to be sent to first), without
+    no-reply and privacy addresses."""
+    text = re.sub(r"<[^>]+>", " ", description or "")
+    found = [apply_email(text)]
+    for match in EMAIL_RE.finditer(text):
+        address = match.group(0).strip(".")
+        if not NOT_FOR_APPLYING.match(address) and not address.lower().endswith((".png", ".jpg", ".gif")):
+            found.append(address)
+    return list(dict.fromkeys(a for a in found if a))[:most]
+
+
 def watch_apply_types() -> None:
     """Note how each job is applied to while JobSpy reads it, from the very page it already
     downloads (no extra requests). Only adds a look; if JobSpy changes, the search is unaffected."""

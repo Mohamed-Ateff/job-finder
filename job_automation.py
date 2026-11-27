@@ -652,14 +652,31 @@ def check_sources(sources: list[str]) -> None:
         sys.exit(f"unknown source(s): {', '.join(unknown)} (known: {', '.join(SITES)})")
 
 
+MOJIBAKE_RE = re.compile(r"[ÃÂâ][\x80-\xbfŒœŠšŸŽžƒˆ˜–-›€™]")
+
+
+def fix_text(text: str) -> str:
+    """UTF-8 text a site sent as if it were Windows-1252 ("DÃ©veloppeur", "fÃ¼r", "â€“") read back
+    as it was written ("Développeur", "für", "–"). Text that isn't broken that way is left alone."""
+    if not text or not MOJIBAKE_RE.search(text):
+        return text or ""
+    for codec in ("cp1252", "latin-1"):
+        try:
+            return text.encode(codec).decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            continue
+    return text
+
+
 def clean(text: str) -> str:
     """One-line text: tags stripped, entities decoded, whitespace collapsed."""
-    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", text or ""))).strip()
+    return re.sub(r"\s+", " ", fix_text(html.unescape(re.sub(r"<[^>]+>", " ", text or "")))).strip()
 
 
 def clean_description(text: str) -> str:
     """Like clean(), but keeps paragraph and list structure for the evaluator."""
-    text = re.sub(r"(?i)<\s*li[^>]*>", "\n- ", text or "")
+    text = fix_text(text or "")
+    text = re.sub(r"(?i)<\s*li[^>]*>", "\n- ", text)
     text = re.sub(r"(?i)<\s*(?:br|/p|/li|/div|/h\d|/tr|/ul|/ol)\s*/?>", "\n", text)
     text = html.unescape(re.sub(r"<[^>]+>", " ", text))
     lines = [re.sub(r"[ \t\r\f\v\xa0]+", " ", line).strip() for line in text.split("\n")]
@@ -693,6 +710,37 @@ REMOTE_ONLY_IN = re.compile(
     r"|\b(?P<d>US|USA|UK|EU|Canada|Europe|India|LATAM)[- ](?:based\s+)?(?:only|residents\s+only|candidates\s+only)\b",
     re.I)
 OPEN_FROM_ANYWHERE = ("anywhere", "worldwide", "mena", "middle east", "emea", "africa", "gcc", "remote")
+
+
+# Common words that only appear in one language: enough of them and the posting is written in it.
+LANGUAGE_WORDS = {
+    "english": {"the", "and", "with", "you", "we", "our", "for", "will", "are", "your", "this", "that", "have", "from"},
+    "german": {"und", "der", "die", "das", "mit", "für", "wir", "sie", "eine", "nicht", "auf", "bei", "ihre", "unser"},
+    "french": {"et", "les", "des", "une", "vous", "nous", "pour", "avec", "dans", "sur", "est", "votre", "notre"},
+    "spanish": {"los", "las", "una", "para", "con", "por", "nosotros", "somos", "tu", "del", "como", "empresa"},
+    "italian": {"il", "della", "che", "sono", "gli", "per", "nel", "delle", "nostro", "lavoro", "esperienza"},
+    "dutch": {"het", "een", "voor", "wij", "zijn", "van", "jouw", "naar", "ervaring", "ook"},
+    "portuguese": {"você", "nós", "não", "uma", "com", "para", "dos", "das", "experiência", "empresa"},
+}
+LANGUAGE_NAMES = {"german": ("german", "deutsch", "الألمانية"), "french": ("french", "français", "francais", "الفرنسية"),
+                  "spanish": ("spanish", "español", "الإسبانية"), "italian": ("italian", "italiano", "الإيطالية"),
+                  "dutch": ("dutch", "nederlands", "الهولندية"), "portuguese": ("portuguese", "português", "البرتغالية")}
+
+
+def posting_language(text: str) -> str:
+    """The language a posting is written in, from its common words; "english" when unsure."""
+    words = re.findall(r"[^\W\d_]+", (text or "").lower())
+    counts = {lang: sum(1 for w in words if w in vocab) for lang, vocab in LANGUAGE_WORDS.items()}
+    best = max(counts, key=counts.get)
+    return best if best != "english" and counts[best] >= 6 and counts[best] > 1.5 * counts["english"] else "english"
+
+
+def speaks(language: str) -> bool:
+    """The person lists this language in their profile (English is assumed)."""
+    if language == "english":
+        return True
+    listed = (getattr(CANDIDATE, "languages_text", "") or "").lower()
+    return any(name in listed for name in LANGUAGE_NAMES.get(language, (language,)))
 
 
 def remote_open_here(job: dict) -> bool:
@@ -1217,8 +1265,9 @@ def filter_jobs(jobs: list[dict]) -> list[dict]:
             blocked += 1
         elif not CANDIDATE.title_hint_re.search(job["title"]):
             no_hint += 1
-        elif job.get("remote") and not remote_open_here(job):
-            remote_closed += 1           # remote, but only for people living in another country
+        elif job.get("remote") and not (remote_open_here(job)
+                                        and speaks(posting_language(f"{job['title']} {job.get('description', '')}"))):
+            remote_closed += 1           # remote, but only for people living in another country or speaking its language
         elif not job.get("remote") and not location_ok(job["location"]):
             elsewhere += 1
         elif companies and companies.search(job.get("company") or ""):
@@ -1229,7 +1278,7 @@ def filter_jobs(jobs: list[dict]) -> list[dict]:
         "filter: %d -> %d (blocked title %d, no seniority/function match %d, outside %s %d%s%s)",
         len(jobs), len(kept), blocked, no_hint, LOCATION, elsewhere,
         f", company skipped {skipped_company}" if companies else "",
-        f", remote only for other countries {remote_closed}" if remote_closed else "",
+        f", remote but for another country or language {remote_closed}" if remote_closed else "",
     )
     return kept
 
@@ -2051,6 +2100,7 @@ class Candidate:
     skills_text: str = ""                          # their skills and headline: the technologies they work with
     years: int | None = None                       # years of experience ("4+" -> 4)
     remote: bool = False                           # open to remote work: remote jobs abroad are searched too
+    languages_text: str = ""                       # languages they list: remote postings in others are skipped
     company_block_re: re.Pattern | None = None     # employers whose jobs are dropped before scoring
 
 
@@ -2126,6 +2176,7 @@ def set_work_facts(c: Candidate, prof: dict) -> Candidate:
     c.skills_text = " | ".join([prof.get("headline") or "", *(prof.get("cv") or {}).get("skills", [])])
     c.years = basic_ai.years_of(prefs.get("years", ""))
     c.remote = "remote" in (prefs.get("work_modes") or [])
+    c.languages_text = " | ".join(str(x) for x in (prof.get("cv") or {}).get("languages", []) or [])
     return c
 
 

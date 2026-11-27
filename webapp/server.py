@@ -399,12 +399,15 @@ def job_rows(c: ja.Candidate) -> list[dict]:
         if url in hidden:
             continue
         d = details.get(url, {})
-        description = (d.get("description") or "") if len(d.get("description") or "") >= 150 else fetched.get(url, "")
+        description = ja.fix_text((d.get("description") or "") if len(d.get("description") or "") >= 150
+                                  else fetched.get(url, ""))
         how, emails = apply_type(c, {**d, "url": url, "description": description}, known_apply)
         track, secondary = d.get("selected_track"), d.get("secondary_track")
-        title = seen.get("title") or d.get("title", "")
-        company = seen.get("company") or d.get("company", "")
-        cv_name = next((n for n in (expected_cv_name_for(name, title, company) for name in names) if n in cvs), None)
+        saved_title = seen.get("title") or d.get("title", "")
+        saved_company = seen.get("company") or d.get("company", "")
+        title, company = ja.fix_text(saved_title), ja.fix_text(saved_company)   # jobs saved with garbled text read right
+        cv_name = next((n for n in (expected_cv_name_for(name, saved_title, saved_company) for name in names)
+                        if n in cvs), None)
         logo = d.get("logo") or logos.get(ja.company_key(company)) or ""
         stored = {"stamp": cvs[cv_name], "name": cv_name} if cv_name else None
         # A CV ChatGPT wrote is served as written; otherwise the CV is made for this job when it's downloaded.
@@ -418,7 +421,7 @@ def job_rows(c: ja.Candidate) -> list[dict]:
             "title": title,
             "company": company,
             "logo": logo if logo.startswith("https://") else "",
-            "location": d.get("location", ""),
+            "location": ja.fix_text(d.get("location", "")),
             "source": d.get("source", ""),
             "fit": int(seen.get("fit_score") or 0),
             "ats": d.get("ats_score"),

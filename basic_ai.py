@@ -72,6 +72,70 @@ def restricted_to(title: str, description: str, country: str) -> list[set[str]]:
                 named.add("saudi")
             out.append(named or {COUNTRY_NATIONALS.get(country.lower(), "saudi")})
     return out
+
+# Technologies a job title can name. When a title names some and the person has none of them
+# (".NET Developer" for a React developer), the title is another field's, whatever else matches.
+# Only for people whose own skills name at least one of these (so other fields are unaffected).
+TECH = {
+    ".NET": r"\.net\b|\bc#|asp\.net|dotnet",
+    "Java": r"\bjava\b(?!\s*script)|spring\s*boot",
+    "Python": r"\bpython\b|\bdjango\b|\bflask\b|\bfastapi\b",
+    "PHP": r"\bphp\b|\blaravel\b|\bsymfony\b",
+    "Ruby": r"\bruby\b|\brails\b",
+    "Go": r"\bgolang\b|\bgo\s+(?:developer|engineer)",
+    "Rust": r"\brust\b",
+    "C++": r"c\+\+",
+    "Android": r"\bandroid\b|\bkotlin\b",
+    "iOS": r"\bios\b|\bswift\b",
+    "Flutter": r"\bflutter\b|\bdart\b",
+    "React Native": r"react[\s-]+native",
+    "Angular": r"\bangular",
+    "Vue": r"\bvue(?:\.?js)?\b|\bnuxt",
+    "React": r"\breact(?:\.?js)?\b(?![\s-]+native)|\bnext\.?js\b",
+    "Node.js": r"\bnode(?:\.?js)?\b|\bnest\.?js\b|\bexpress\.?js\b",
+    "WordPress": r"wordpress|woocommerce|elementor",
+    "Shopify": r"\bshopify\b",
+    "Kafka": r"\bkafka\b",
+    "Big data": r"\bspark\b|\bhadoop\b|\bdatabricks\b|\bsnowflake\b",
+    "Data engineering": r"\bdata\s+(?:engineer|engineering|warehouse|platform)\b|\betl\b",
+    "Salesforce": r"\bsalesforce\b",
+    "SAP": r"\bsap\b",
+    "Odoo": r"\bodoo\b",
+    "DevOps": r"\bdevops\b|\bkubernetes\b|\bsre\b|site\s+reliability",
+    "Azure": r"\bazure\b",
+    "AI / ML": r"\bai\b|machine\s+learning|\bml\b|deep\s+learning|computer\s+vision|\bnlp\b|\bllms?\b|openai|chatgpt",
+    "Embedded": r"\bembedded\b|\bfirmware\b",
+    "QA": r"\bqa\b|test\s+automation|\bsdet\b|quality\s+assurance\s+engineer",
+    "Unity / games": r"\bunity\b|\bunreal\b|game\s+developer",
+    "Cybersecurity": r"\bcyber\s*security\b|\bsoc\s+analyst\b|penetration",
+    "Network": r"\bnetwork\s+engineer\b|\bccna\b|\bccnp\b",
+}
+TECH_RE = {name: re.compile(rx, re.I) for name, rx in TECH.items()}
+# One-word search titles too vague to be a job title ("data", "ai", "automation"): they only half-match.
+VAGUE_TITLES = {"ai", "data", "automation", "it", "tech", "technology", "software", "web", "digital", "design",
+                "developer", "engineer", "manager", "marketing", "sales", "business", "operations", "it support"}
+# "5+ years of experience", "minimum of 7 years", "at least 6 years'": the years a posting asks for.
+YEARS_RE = re.compile(
+    r"(?:(?:minimum|min\.?|at\s+least)\s+(?:of\s+)?)?(\d{1,2})\s*\+?\s*(?:(?:-|–|to)\s*\d{1,2}\s*)?\+?\s*years?['’]?"
+    r"(?:\s+(?:of|in|with))?(?:\s+[\w./#+-]+){0,4}?\s+(?:experience|exp\b)", re.I)
+
+
+def techs_in(text: str) -> set[str]:
+    return {name for name, rx in TECH_RE.items() if rx.search(text or "")}
+
+
+def years_asked(description: str) -> int | None:
+    """The most years of experience a posting requires (ignoring silly numbers), or None."""
+    found = [int(m.group(1)) for m in YEARS_RE.finditer(description or "") if 1 <= int(m.group(1)) <= 20]
+    return max(found) if found else None
+
+
+def years_of(text: str) -> int | None:
+    """'4+' / '4 years' / 'أربع' -> 4 (digits only); '' -> None."""
+    m = re.search(r"\d{1,2}", text or "")
+    return int(m.group(0)) if m else None
+
+
 LEVELS = (  # (pattern in the title, level) - first match wins
     (re.compile(r"\b(?:chief|c[efiotm]o|vice\s+president|vp|svp|evp|general\s+manager|head|managing\s+director)\b", re.I), "executive"),
     (re.compile(r"\b(?:director|associate\s+director)\b", re.I), "director"),
@@ -150,7 +214,10 @@ class BasicAI:
     def __init__(self, candidate, pipeline):
         self.c = candidate
         self.ja = pipeline
-        self.keywords = [(k, _term_re(k)) for k in candidate.keywords]
+        # A vague one-word title ("data", "ai") is only a partial title match: it's still searched for.
+        self.keywords = [(k, _term_re(k)) for k in candidate.keywords if k.strip().lower() not in VAGUE_TITLES]
+        self.my_tech = techs_in(getattr(candidate, "skills_text", "") or "")
+        self.years = getattr(candidate, "years", None)
         track_keywords = getattr(candidate, "track_keywords", None) or {}
         titles = {k.lower() for k in candidate.keywords}
         self.tracks: dict[int, list[tuple[str, re.Pattern]]] = {}
@@ -159,7 +226,7 @@ class BasicAI:
             terms = _phrases(name) + [k.lower() for k in track_keywords.get(n, [])]
             name_stems = _stems(name)
             terms += [k.lower() for k in candidate.keywords if _stems(k) & name_stems]   # search keywords near this track
-            unique = [t for t in dict.fromkeys(t for t in terms if t) if t not in BROAD]
+            unique = [t for t in dict.fromkeys(t for t in terms if t) if t not in BROAD and t not in VAGUE_TITLES]
             self.tracks[n] = [(t, _term_re(t)) for t in unique]
             # Evidence the job is in the candidate's field: the track's specific terms, not job titles
             # (they're already in the title check) and not phrases every manager's posting uses.
@@ -249,6 +316,16 @@ class BasicAI:
             interview = 25 + round(35 * title_match * in_field) + round(30 * level_fit) + 10
         if level == "junior":
             ats, interview = ats - 15, interview - 25          # keeps it out of Strong / Good
+        # The title names technologies the person doesn't work with: another field's job.
+        title_tech = techs_in(title)
+        other_stack = sorted(title_tech) if self.my_tech and title_tech and not title_tech & self.my_tech else []
+        if other_stack:
+            ats, interview = ats - 15, interview - 35
+        # Far more years than the person has (7+ asked of someone with 4): a long shot.
+        asked = years_asked(description) if self.years else None
+        too_senior = bool(asked and asked >= self.years + 3)
+        if too_senior:
+            ats, interview = ats - 5, interview - 20
         ats, interview = max(0, min(100, ats)), max(0, min(100, interview))
         fit = ja.weighted_fit(ats, interview)
 
@@ -267,6 +344,10 @@ class BasicAI:
             why.append("but the title is junior for this profile")
         elif level:
             why.append(LEVEL_WORDS[level])
+        if other_stack:
+            why.append(f"but it is a {', '.join(other_stack)} job, which isn't in the profile's skills")
+        if too_senior:
+            why.append(f"but it asks for {asked}+ years of experience")
         reasoning = ("; ".join(why) + ".") if why else "Few of the profile's keywords appear in this posting."
         reasoning = reasoning[0].upper() + reasoning[1:]
         self.breakdowns[job["url"]] = {
@@ -276,6 +357,8 @@ class BasicAI:
                                 else "unclear" if level is None else "near"), "level": level or ""},
             "field": {"state": ("no_description" if not described else "match" if len(domain_hits) >= 2
                                 else "few" if domain_hits else "none"), "terms": domain_hits[:6]},
+            "stack": other_stack,
+            "years": {"asked": asked, "has": self.years} if too_senior else None,
         }
         return ja.JobEvaluation(
             job_url=job["url"], ats_score=ats, interview_score=interview, fit_score=fit, selected_track=track,

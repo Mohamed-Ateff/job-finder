@@ -86,6 +86,12 @@ window.AR = {
   "Easy Apply on {site}": "تقديم سريع عبر {site}", "Apply by Email": "قدّم بالبريد", "Open Job": "افتح الوظيفة",
   "Write an email": "اكتب رسالة", "PDF": "PDF", "Word": "Word",
   "Best for applying online": "الأنسب للتقديم عبر الإنترنت", "To edit before sending": "للتعديل قبل الإرسال",
+  "Search every morning": "ابحث كل صباح", "Off": "إيقاف", "On": "تشغيل",
+  "From {hour}:00 Cairo time, for everyone here. The 5 best matches are emailed to each person with email set up, quickest to apply first.":
+    "من الساعة {hour}:00 بتوقيت القاهرة، لكل الأشخاص هنا. أفضل 5 وظائف تُرسل بالبريد لكل من أعدّ بريده، والأسهل في التقديم أولاً.",
+  "It’s a {tech} job, which isn’t in the profile’s skills, so it scores lower.":
+    "الوظيفة تطلب {tech}، وهي ليست ضمن مهارات الملف، لذلك درجتها أقل.",
+  "It asks for {asked}+ years of experience; the profile has {has}.": "تطلب خبرة {asked}+ سنوات، والملف فيه {has}.",
   "Did you apply to {company}?": "هل قدّمت على {company}؟", "Select the text and copy it by hand.": "حدّد النص وانسخه يدوياً.",
   "Click to clear the mark": "اضغط لإزالة العلامة", "Mark this job once you’ve sent your application": "ضع العلامة بعد إرسال طلبك",
   "About the Role": "عن الوظيفة", "Why It Fits": "لماذا تناسب", "Details": "التفاصيل",

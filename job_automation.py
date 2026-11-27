@@ -679,6 +679,32 @@ def search_queries(keywords: list[str]) -> list[str]:
             for i in range(0, len(keywords), KEYWORDS_PER_QUERY)]
 
 
+# Where remote jobs are also searched for people open to remote work: LinkedIn's region names.
+# (Worldwide is mostly remote jobs open only to Americans or Canadians, so it isn't searched.)
+REMOTE_REGIONS = ["Middle East", "EMEA"]
+# A remote job that's only open to people in another country: "must be based in the UK",
+# "authorized to work in the United States", "EU residents only".
+REMOTE_ONLY_IN = re.compile(
+    r"(?:must|should|need\s+to|required\s+to|have\s+to)\s+(?:be\s+)?(?:physically\s+)?(?:located|based|living|resid(?:e|ing)|"
+    r"resident)\s+(?:in|within)\s+(?:the\s+)?(?P<a>[A-Za-z .,&/-]{2,40})"
+    r"|(?:authori[sz]ed|eligible|right|permit(?:ted)?)\s+to\s+work\s+in\s+(?:the\s+)?(?P<b>[A-Za-z .,&/-]{2,40})"
+    r"|(?:only\s+(?:open\s+to\s+)?(?:candidates|applicants|residents|people)\s+(?:based|located|living)?\s*in\s+(?:the\s+)?)"
+    r"(?P<c>[A-Za-z .,&/-]{2,40})"
+    r"|\b(?P<d>US|USA|UK|EU|Canada|Europe|India|LATAM)[- ](?:based\s+)?(?:only|residents\s+only|candidates\s+only)\b",
+    re.I)
+OPEN_FROM_ANYWHERE = ("anywhere", "worldwide", "mena", "middle east", "emea", "africa", "gcc", "remote")
+
+
+def remote_open_here(job: dict) -> bool:
+    """A remote job someone in the searched country can take: not limited to people living elsewhere."""
+    here = [LOCATION.lower(), *COUNTRY_HINTS.get(LOCATION.strip().lower(), ()), *OPEN_FROM_ANYWHERE]
+    for m in REMOTE_ONLY_IN.finditer(re.sub(r"<[^>]+>", " ", job.get("description") or "")):
+        place = next(g for g in m.groups() if g).lower()
+        if not any(h in place for h in here):
+            return False
+    return True
+
+
 def site_search_args(source: str) -> dict | None:
     """Per-site JobSpy arguments; None when the site can't search LOCATION."""
     if source == "linkedin":
@@ -788,6 +814,17 @@ def watch_apply_types() -> None:
                         _apply_seen[f"li-{job_id}"] = kind
         fetch_details.watched = True
         LinkedIn._fetch_details = fetch_details
+    if LinkedIn is not None and callable(getattr(LinkedIn, "_search_params", None)) \
+            and not getattr(LinkedIn._search_params, "watched", False):
+        original_params = LinkedIn._search_params
+
+        def search_params(self, *args, **kwargs):
+            params = original_params(self, *args, **kwargs)
+            if getattr(getattr(self, "scraper_input", None), "is_remote", False):
+                params["f_WT"] = "2"            # LinkedIn's own "Remote" filter (JobSpy doesn't pass it)
+            return params
+        search_params.watched = True
+        LinkedIn._search_params = search_params
     try:
         from jobspy.bayt import Bayt
     except Exception:  # noqa: BLE001
@@ -829,6 +866,15 @@ def jobspy_row(row: dict, source: str) -> dict:
     return item
 
 
+def remote_searches(source: str) -> list[dict]:
+    """For someone open to remote work: LinkedIn's remote-only jobs in the wider regions too (the
+    searched country's own remote jobs are already in its normal search)."""
+    if source != "linkedin" or not getattr(CANDIDATE, "remote", False):
+        return []
+    return [{"location": region, "fetch_description": True, "is_remote": True}
+            for region in REMOTE_REGIONS if region.lower() != LOCATION.strip().lower()]
+
+
 def scrape(keywords: list[str], sources: list[str], hours: int | None = None) -> list[dict]:
     """Public job listings, read directly (no account, no key). A site that fails
     is skipped; only when every site fails does the run stop, with the reason."""
@@ -841,14 +887,18 @@ def scrape(keywords: list[str], sources: list[str], hours: int | None = None) ->
     watch_apply_types()
     hours = hours or SEARCH_HOURS
     queries = search_queries(keywords)
-    plan = [(source, extra) for source in sources if (extra := site_search_args(source)) is not None]
-    for source, _ in plan:
-        log.info("scrape: %s (%d keywords in %d searches, last %d hours)", source, len(keywords), len(queries), hours)
+    plan = [(source, [extra, *remote_searches(source)]) for source in sources
+            if (extra := site_search_args(source)) is not None]
+    for source, extras in plan:
+        log.info("scrape: %s (%d keywords in %d searches, last %d hours%s)", source, len(keywords),
+                 len(queries) * len(extras), hours,
+                 f", remote jobs in {', '.join(e['location'] for e in extras[1:])} too" if len(extras) > 1 else "")
 
-    def one_site(source: str, extra: dict) -> tuple[list[dict], str | None]:
+    def one_site(source: str, extras: list[dict]) -> tuple[list[dict], str | None]:
         """Every search on one site, in order (LinkedIn with a pause between them)."""
         found_rows, failed = [], []
-        for i, query in enumerate(keywords if source == "bayt" else queries):     # Bayt doesn't read OR
+        searches = [(extra, query) for extra in extras for query in (keywords if source == "bayt" else queries)]
+        for i, (extra, query) in enumerate(searches):     # Bayt doesn't read OR
             if i and source == "linkedin":
                 time.sleep(QUERY_PAUSE_SECONDS)
             try:
@@ -860,7 +910,8 @@ def scrape(keywords: list[str], sources: list[str], hours: int | None = None) ->
             except Exception as exc:  # noqa: BLE001 - one bad search must not kill the run
                 failed.append(str(exc))
                 continue
-            found_rows.extend(jobspy_row(r, source) for r in records)
+            found_rows.extend({**jobspy_row(r, source), **({"remote": True} if extra.get("is_remote") else {})}
+                              for r in records)
         if failed and not found_rows:
             log.error("  %s: %s", source, failed[0])
             return found_rows, failed[0]
@@ -870,7 +921,7 @@ def scrape(keywords: list[str], sources: list[str], hours: int | None = None) ->
     # The sites are searched at the same time (each one still paced on its own), so a search
     # takes as long as the slowest site rather than all of them added up.
     with ThreadPoolExecutor(max_workers=max(1, len(plan))) as pool:
-        results = list(pool.map(lambda p: one_site(*p), plan))
+        results = list(pool.map(lambda p: one_site(*p), plan))     # (source, its searches)
     rows = [row for found_rows, _ in results for row in found_rows]           # in the order the sites were listed
     errors = [error for _, error in results if error]
     tried = len(plan)
@@ -1017,6 +1068,8 @@ def normalize(items: list[dict]) -> list[dict]:
             "posted": posted if re.fullmatch(r"\d{4}-\d\d-\d\d", posted) else "",
         }
         set_apply(job, str(item.get("apply") or ""))
+        if item.get("remote"):
+            job["remote"] = True
         jobs.append(job)
     missing = sum(1 for job in jobs if not job["description"])
     log.info("normalize: %d -> %d (%d without a description)", len(items), len(jobs), missing)
@@ -1157,23 +1210,26 @@ def location_ok(place: str) -> bool:
 
 def filter_jobs(jobs: list[dict]) -> list[dict]:
     kept = []
-    blocked = no_hint = elsewhere = skipped_company = 0
+    blocked = no_hint = elsewhere = skipped_company = remote_closed = 0
     companies = CANDIDATE.company_block_re
     for job in jobs:
         if CANDIDATE.title_block_re.search(job["title"]):
             blocked += 1
         elif not CANDIDATE.title_hint_re.search(job["title"]):
             no_hint += 1
-        elif not location_ok(job["location"]):
+        elif job.get("remote") and not remote_open_here(job):
+            remote_closed += 1           # remote, but only for people living in another country
+        elif not job.get("remote") and not location_ok(job["location"]):
             elsewhere += 1
         elif companies and companies.search(job.get("company") or ""):
             skipped_company += 1
         else:
             kept.append(job)
     log.info(
-        "filter: %d -> %d (blocked title %d, no seniority/function match %d, outside %s %d%s)",
+        "filter: %d -> %d (blocked title %d, no seniority/function match %d, outside %s %d%s%s)",
         len(jobs), len(kept), blocked, no_hint, LOCATION, elsewhere,
         f", company skipped {skipped_company}" if companies else "",
+        f", remote only for other countries {remote_closed}" if remote_closed else "",
     )
     return kept
 
@@ -1992,6 +2048,9 @@ class Candidate:
     cv_fixed: Callable[[], dict] | None = None     # contact + fixed CV sections, cv_profile.json's shape
     former_names: list[str] = field(default_factory=list)     # earlier names (CV file names)
     nationality: str = ""                          # "Saudi": jobs only Saudi nationals may apply for are kept
+    skills_text: str = ""                          # their skills and headline: the technologies they work with
+    years: int | None = None                       # years of experience ("4+" -> 4)
+    remote: bool = False                           # open to remote work: remote jobs abroad are searched too
     company_block_re: re.Pattern | None = None     # employers whose jobs are dropped before scoring
 
 
@@ -2049,11 +2108,24 @@ def apply_profile(c: Candidate, prof: dict) -> Candidate:
     c.cv_fixed = lambda: profiles.cv_fixed(prof)
     c.former_names = list(prof.get("former_names") or [])
     c.nationality = prof.get("nationality", "")
+    set_work_facts(c, prof)
     c.company_block_re = company_pattern(prof)
     # The words of their field count as evidence for every track in free scoring.
     if s.get("keywords"):
         c.track_keywords = {n: list(dict.fromkeys([*c.track_keywords.get(n, []), *s["keywords"]]))
                             for n in c.track_names}
+    return c
+
+
+def set_work_facts(c: Candidate, prof: dict) -> Candidate:
+    """What free scoring and the search need from a profile beyond titles: the technologies in their
+    skills, their years of experience, and whether they want remote work."""
+    import basic_ai
+
+    prefs = prof.get("preferences") or {}
+    c.skills_text = " | ".join([prof.get("headline") or "", *(prof.get("cv") or {}).get("skills", [])])
+    c.years = basic_ai.years_of(prefs.get("years", ""))
+    c.remote = "remote" in (prefs.get("work_modes") or [])
     return c
 
 
@@ -2075,7 +2147,7 @@ def simple_candidate(key: str, prof: dict) -> Candidate:
             template = template.replace(placeholder, value)
         return template
 
-    return Candidate(
+    return set_work_facts(Candidate(
         key=key, name=name,
         system_label="Job Search Profile",
         digest_title="Job Digest",
@@ -2108,7 +2180,7 @@ def simple_candidate(key: str, prof: dict) -> Candidate:
         former_names=list(prof.get("former_names") or []),
         nationality=prof.get("nationality", ""),
         company_block_re=company_pattern(prof),
-    )
+    ), prof)
 
 
 def _read_text(path: Path) -> str | None:

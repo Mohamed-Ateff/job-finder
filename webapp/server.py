@@ -439,6 +439,7 @@ def job_rows(c: ja.Candidate) -> list[dict]:
             "description": description,
             "apply": how,
             "emails": emails,
+            "remote": bool(d.get("remote")),
             "breakdown": d.get("breakdown"),
             "has_cv": bool(d.get("cv")),
         })
@@ -491,7 +492,9 @@ def settings_for() -> dict:
     hours = int(env_value("SEARCH_HOURS") or ja.SEARCH_HOURS)
     return {"groups": groups, "done": done, "total": total, "email": email, "chatgpt": chatgpt,
             "search_hours": hours if hours in SEARCH_PERIODS else ja.SEARCH_HOURS,
-            "search_periods": list(SEARCH_PERIODS), "demo": demo_on(), "model": model}
+            "search_periods": list(SEARCH_PERIODS), "demo": demo_on(), "model": model,
+            "daily": daily_on(), "daily_hour": DAILY_HOUR,
+            "daily_last": (read_json(daily_file(), {}) or {}).get("date", "")}
 
 
 def profile_data(c: ja.Candidate) -> tuple[dict, bool]:
@@ -526,7 +529,7 @@ def profile_readiness(c: ja.Candidate) -> dict:
 
 def settings_keys() -> set[str]:
     keys = {item["env"] for item in ACCOUNT_ITEMS} | {"AI_MODE", "OPENAI_MODEL_EVAL", "BREVO_SENDER_NAME", "SOURCES",
-                                                     "SEARCH_HOURS"}
+                                                     "SEARCH_HOURS", "DAILY_SEARCH"}
     for key in candidate_keys():
         c = candidate(key)
         keys |= {c.email_to_env, c.email_cc_env}
@@ -643,6 +646,82 @@ class RunManager:
 
 
 RUNS = RunManager()
+
+
+# ------------------------------------------------------------ daily search --
+DAILY_HOUR = 7                          # local time (Cairo): the search runs once a day from this hour
+
+
+def daily_on() -> bool:
+    """The search runs by itself every morning. On by default on the cloud server (always on), off on a
+    laptop (which may be asleep or closed); Settings can turn it on or off either way."""
+    value = env_value("DAILY_SEARCH").lower()
+    return value == "on" if value in ("on", "off") else bool(os.environ.get("RENDER_EXTERNAL_HOSTNAME"))
+
+
+def local_now() -> datetime:
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("Africa/Cairo"))
+    except Exception:  # noqa: BLE001 - no time-zone data on the server: Cairo's winter time
+        from datetime import timedelta, timezone
+        return datetime.now(timezone(timedelta(hours=2)))
+
+
+def daily_file() -> Path:
+    return ja.STATE_DIR / "daily_search.json"
+
+
+def daily_due(now: datetime | None = None) -> bool:
+    now = now or local_now()
+    last = (read_json(daily_file(), {}) or {}).get("date", "")
+    return daily_on() and not demo_on() and now.hour >= DAILY_HOUR and last != now.date().isoformat()
+
+
+def run_daily_search(wait: float = 10.0) -> list[str]:
+    """Everyone's search, one person after another (job sites slow down tools that rush them). Each
+    finished search emails its best matches to people who set up email, as a search from the app does."""
+    ja.write_json(daily_file(), {"date": local_now().date().isoformat(), "started": ja.now_iso()})
+    started = []
+    for key in candidate_keys():
+        try:
+            c = candidate(key)
+        except HTTPException:
+            continue
+        if not c.keywords:
+            continue
+        sources = [s for s in (c.sources or configured_sources()) if s in ja.SITES]
+        deadline = time.time() + 3 * 3600
+        while RUNS.active(key) and time.time() < deadline:      # a search started by hand finishes first
+            time.sleep(wait)
+        try:
+            run = RUNS.start(key, "real", ["--sources", ",".join(sources)] if sources else [])
+        except HTTPException:
+            continue
+        started.append(key)
+        while run.status == "running" and time.time() < deadline:
+            time.sleep(wait)
+    return started
+
+
+def daily_loop() -> None:
+    while True:
+        try:
+            if daily_due():
+                run_daily_search()
+        except Exception as exc:  # noqa: BLE001 - try again on the next check
+            print(f"daily search failed: {exc}", flush=True)
+        time.sleep(60)
+
+
+_daily_started = False
+
+
+def start_daily_search() -> None:
+    global _daily_started
+    if not _daily_started:
+        _daily_started = True
+        threading.Thread(target=daily_loop, daemon=True).start()
 
 
 def activity(c: ja.Candidate) -> dict | None:
@@ -916,6 +995,7 @@ def check_apply_type(key: str, url: str):
 
 # ------------------------------------------------------------------ email --
 MAX_EMAIL_JOBS = 10
+RUN_EMAIL_JOBS = 5                      # after a search: only the five best, so the email gets read
 
 
 def _two_lines(text: str, limit: int = 260) -> str:
@@ -939,14 +1019,21 @@ def email_html(person: str, jobs: list[dict], intro: str) -> str:
         verdict = j.get("fit_verdict") or ja.verdict(int(j.get("fit_score") or 0))
         about = _two_lines(j.get("summary") or j.get("description") or "")
         why = (j.get("reasoning") or "").strip()
-        place = " · ".join(x for x in (j.get("company"), j.get("location")) if x)
+        place = " · ".join(x for x in (j.get("company"), "Remote" if j.get("remote") else "", j.get("location")) if x)
         title = f'<a href="{e(url)}" style="color:#1b1a17;text-decoration:none">{e(j["title"])}</a>' if url else e(j["title"])
+        site = ja.SITES.get(j.get("source", ""), "the site")
+        how = {"easy": f"Easy Apply on {site} - a few minutes",
+               "email": f"Apply by email: {', '.join(j.get('emails') or [])}",
+               "site": "Apply on the company's site - a longer form"}.get(j.get("apply") or "", "")
+        how_html = (f'<div style="font-size:13px;font-weight:600;margin:0 0 10px;color:'
+                    f'{"#2f7a4d" if j.get("apply") in ("easy", "email") else "#5f5d57"}">{e(how)}</div>') if how else ""
         rows.append(f"""
 <tr><td style="padding:20px 0;border-top:1px solid #e3e1db">
   <div style="font-size:12.5px;color:#5f5d57">{e(place)}</div>
   <div style="font-size:17px;font-weight:600;line-height:1.35;margin:3px 0 6px">{title}</div>
   <div style="font-size:13px;margin-bottom:10px"><b style="color:{colours.get(verdict, '#1b1a17')}">{int(j.get('fit_score') or 0)}</b>
     <span style="color:#5f5d57"> / 100 · {e(verdict.title())} fit</span></div>
+  {how_html}
   {f'<p style="margin:0 0 8px;font-size:14px;line-height:1.55"><b>About the role.</b> {e(about)}</p>' if about else ''}
   {f'<p style="margin:0 0 12px;font-size:14px;line-height:1.55"><b>Why you fit.</b> {e(why)}</p>' if why else ''}
   {f'<a href="{e(url)}" style="display:inline-block;background:#1b1a17;color:#ffffff;text-decoration:none;font-size:13px;font-weight:600;padding:9px 16px;border-radius:7px">Open the job</a>' if url else ''}
@@ -1041,8 +1128,13 @@ def email_run_matches(key: str, folder: Path) -> str:
              if j.get("fit_verdict") in ("strong", "good") and j.get("url") not in hidden]
     if not found:
         return "email: no strong or good matches this time - nothing sent"
-    best = sorted(found, key=lambda j: -int(j.get("fit_score") or 0))[:MAX_EMAIL_JOBS]
-    jobs = [job_detail(c, j["url"]) or j for j in best]
+    known = read_json(apply_file(c), {}) or {}
+    for j in found:
+        j["apply"], j["emails"] = apply_type(c, j, known)
+    # The few best, quickest to apply to first: Easy Apply and by-email jobs, then the rest, best score first.
+    quick = {"easy": 0, "email": 0}
+    best = sorted(found, key=lambda j: (quick.get(j["apply"], 1), -int(j.get("fit_score") or 0)))[:RUN_EMAIL_JOBS]
+    jobs = [{**(job_detail(c, j["url"]) or j), "apply": j["apply"], "emails": j["emails"]} for j in best]
     n = len(jobs)
     send_jobs_email(c, jobs, to, f"{n} new {'match' if n == 1 else 'matches'}",
                     f"{n} new job {'match' if n == 1 else 'matches'} for {first_name(c.name)} - {datetime.now():%d %b}")
@@ -1303,6 +1395,8 @@ def save_settings(body: SettingsRequest):
             raise HTTPException(400, "AI_MODE must be basic or chatgpt")
         if name == "SEARCH_HOURS" and value not in {str(h) for h in SEARCH_PERIODS}:
             raise HTTPException(400, "Choose 24 hours, 3 days or 7 days")
+        if name == "DAILY_SEARCH" and value not in ("on", "off"):
+            raise HTTPException(400, "DAILY_SEARCH must be on or off")
         if check_key(name, value) is False:          # None (offline) still saves
             raise HTTPException(400, KEY_HINTS[name])
         updates[name] = value

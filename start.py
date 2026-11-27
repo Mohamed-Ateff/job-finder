@@ -20,7 +20,7 @@ REPO = os.environ.get("DATA_REPO", "")
 TOKEN = os.environ.get("HF_TOKEN", "")
 SAVE_EVERY = 15
 FOLDERS = ("candidates/", "data/", "runs/", "backups/")
-ROOT_FILES = re.compile(r"^(jobs.*|apply_.*|applied_.*|hidden_.*|descriptions_.*|client_checklist)\.json$|^\.env$")
+ROOT_FILES = re.compile(r"^(jobs.*|daily_search|apply_.*|applied_.*|hidden_.*|descriptions_.*|client_checklist)\.json$|^\.env$")
 
 
 def tracked(rel: str) -> bool:
@@ -107,8 +107,9 @@ def main() -> None:
     os.environ["WEB_HOST"], os.environ["WEB_PORT"] = "0.0.0.0", str(port)
     import uvicorn
 
-    from webapp.server import app
+    from webapp.server import app, start_daily_search
 
+    start_daily_search()                # the every-morning search (on by default here)
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning", proxy_headers=True, forwarded_allow_ips="*")
 
 

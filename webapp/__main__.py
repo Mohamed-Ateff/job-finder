@@ -1,4 +1,5 @@
-"""python -m webapp  ->  http://localhost:8501  (add --no-browser to skip opening it)"""
+"""python -m webapp  ->  http://localhost:8501  (add --no-browser to skip opening it; --keeper to also run
+the old laptop link keeper, which points the fixed link at this computer - normally not wanted)"""
 
 import os
 import socket
@@ -11,7 +12,7 @@ from pathlib import Path
 
 import uvicorn
 
-from webapp.server import HOST, PORT, app
+from webapp.server import HOST, PORT, app, start_daily_search
 
 ROOT = Path(__file__).resolve().parents[1]
 KEEPER = ROOT / "tools" / "keep_online.py"
@@ -44,6 +45,9 @@ if __name__ == "__main__":
     print(f"Job Automation is running at {url}  (Ctrl+C to stop)")
     if "--no-browser" not in sys.argv:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
-    if KEEPER.exists() and os.name == "nt" and "--no-keeper" not in sys.argv:
+    # The app lives on the cloud server now: the laptop keeper (which points the fixed link at a temporary
+    # Cloudflare link on this computer) only runs when asked for, or it would take the fixed link away.
+    if KEEPER.exists() and os.name == "nt" and "--keeper" in sys.argv:
         threading.Thread(target=watch_keeper, daemon=True).start()
+    start_daily_search()                # off on a laptop unless turned on in Settings
     uvicorn.run(app, host=HOST, port=PORT, log_level="warning")

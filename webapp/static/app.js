@@ -617,7 +617,8 @@ function jobRow(j) {
   const mark = j.applied ? `<span class="applied-mark" title="${esc(t("Applied"))}">${icon("check", 11, "", 2.6)}</span>` : "";
   const how = j.source !== "demo" && (isEasy(j) || j.apply === "closed")
     ? `<span class="${j.apply === "closed" ? "closed" : "easy"}">${esc(t(APPLY[j.apply].name))}</span>` : "";
-  const meta = [how, ...[siteName(j.source), postedLabel(j.posted), j.applied ? t("Applied") : ""].filter(Boolean).map(esc)]
+  const meta = [how, ...[j.remote ? t("Remote") : "", siteName(j.source), postedLabel(j.posted), j.applied ? t("Applied") : ""]
+    .filter(Boolean).map(esc)]
     .filter(Boolean).join(" · ");
   return `<button class="row${sel}${j.applied ? " is-applied" : ""}" data-id="${esc(j.url)}">
     ${mark}${logo(j)}
@@ -696,6 +697,9 @@ function whyHtml(j) {
       few: t("The posting asks for {terms}.", { terms }),
       none: t("The posting doesn’t mention the profile’s skills."),
       no_description: t("The site didn’t share the description, so only the title was judged.") }[b.field.state],
+    b.stack?.length ? t("It’s a {tech} job, which isn’t in the profile’s skills, so it scores lower.",
+      { tech: `<bdi>${esc(b.stack.join(", "))}</bdi>` }) : "",
+    b.years ? t("It asks for {asked}+ years of experience; the profile has {has}.", { asked: esc(b.years.asked), has: esc(b.years.has) }) : "",
   ].filter(Boolean);
   return section("Why It Fits", `<p>${said.join(" ")}</p>`);
 }
@@ -926,8 +930,9 @@ function jobDetail(j) {
   const site = siteName(j.source);
   // The four facts a client looks for, in one quiet strip.
   // "Riyadh, Riyadh, Saudi Arabia" -> "Riyadh, Saudi Arabia"
-  const place = [...new Map((j.location || "").split(",").map((s) => s.trim()).filter(Boolean)
+  const where = [...new Map((j.location || "").split(",").map((s) => s.trim()).filter(Boolean)
     .map((s) => [s.toLowerCase(), s])).values()].join(", ");
+  const place = j.remote ? [t("Remote"), where].filter(Boolean).join(" · ") : where;
   const facts = [
     ["Posted", postedShort(j.posted)],
     ["Found", relDateTime(j.evaluated)],
@@ -987,6 +992,8 @@ function settingsHtml() {
       ${row("Appearance", "", appearancePick())}
       ${row("Language", "", langPick())}
       ${row("Look back", "How far back each search reads new postings.", seg("hours", periods, String(s.search_hours), "hours"))}
+      ${row("Search every morning", t("From {hour}:00 Cairo time, for everyone here. The 5 best matches are emailed to each person with email set up, quickest to apply first.", { hour: s.daily_hour }),
+        seg("daily", [["off", esc(t("Off"))], ["on", esc(t("On"))]], s.daily ? "on" : "off"))}
     </div></section>
     ${mailHtml()}
     ${s.groups.map(setupGroup).join("")}
@@ -2151,6 +2158,7 @@ function onSeg(name, value) {
   if (name === "filter") { S.filter = value; paintList(false); paintBar(); return paintDetail(true); }
   if (name === "lang") return value !== LANG && applyLang(value);
   if (name === "hours") return saveSetting("SEARCH_HOURS", value);
+  if (name === "daily") return saveSetting("DAILY_SEARCH", value);
   if (name === "mode") { S.forms[S.key].mode = value; S.forms[S.key].confirm = false; return repaintRunSheet(); }
 }
 

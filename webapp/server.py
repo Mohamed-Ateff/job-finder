@@ -40,6 +40,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
+import apply_kit  # noqa: E402
 import cv_import  # noqa: E402
 import job_automation as ja  # noqa: E402
 import cv_pdf  # noqa: E402
@@ -392,12 +393,15 @@ def job_rows(c: ja.Candidate) -> list[dict]:
     new_urls = {j.get("url") for j in (read_json(recent[0] / "evaluated.json", []) or [])} if recent else set()
     logos = state.get("logos") or {}
     fetched = read_json(description_file(c), {}) or {}     # descriptions read later, when a job was opened
+    known_apply = read_json(apply_file(c), {}) or {}       # apply types learnt later, from LinkedIn
     names = [c.name, *reversed(c.former_names)]     # CVs made before a rename carry the old name
     rows = []
     for url, seen in state["seen"].items():
         if url in hidden:
             continue
         d = details.get(url, {})
+        description = (d.get("description") or "") if len(d.get("description") or "") >= 150 else fetched.get(url, "")
+        how, apply_to = apply_type(c, {**d, "url": url, "description": description}, known_apply)
         track, secondary = d.get("selected_track"), d.get("secondary_track")
         title = seen.get("title") or d.get("title", "")
         company = seen.get("company") or d.get("company", "")
@@ -433,7 +437,9 @@ def job_rows(c: ja.Candidate) -> list[dict]:
             "confidence": d.get("track_selection_confidence"),
             "summary": d.get("summary"),
             "reasoning": d.get("reasoning"),
-            "description": (d.get("description") or "") if len(d.get("description") or "") >= 150 else fetched.get(url, ""),
+            "description": description,
+            "apply": how,
+            "apply_email": apply_to,
             "breakdown": d.get("breakdown"),
             "has_cv": bool(d.get("cv")),
         })
@@ -772,18 +778,22 @@ def job_detail(c: ja.Candidate, url: str) -> dict | None:
 DOCX_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
-def cv_files(c: ja.Candidate, job: dict, pdf: bool = False) -> tuple[str, bytes, bytes | None]:
-    """The CV for one job, made now from the profile as it is: (Word file name, Word bytes, PDF bytes)."""
+def guarded_cv(c: ja.Candidate, job: dict):
+    """The person's CV content for one job, through the disclosure guard. Call with _cv_lock held."""
     import basic_ai
 
+    track = job.get("selected_track") if job.get("selected_track") in c.track_names else min(c.track_names)
+    cv = basic_ai.BasicAI(c, ja).tailor(job, track)
+    return ja.scrub_cv(cv) if ja.cv_leaks(cv) else cv
+
+
+def cv_files(c: ja.Candidate, job: dict, pdf: bool = False) -> tuple[str, bytes, bytes | None]:
+    """The CV for one job, made now from the profile as it is: (Word file name, Word bytes, PDF bytes)."""
     with _cv_lock:
         previous = ja.CANDIDATE
         ja.CANDIDATE = c
         try:
-            track = job.get("selected_track") if job.get("selected_track") in c.track_names else min(c.track_names)
-            cv = basic_ai.BasicAI(c, ja).tailor(job, track)
-            if ja.cv_leaks(cv):
-                cv = ja.scrub_cv(cv)
+            cv = guarded_cv(c, job)
             fixed = ja.load_cv_profile()
             docx = ja.render_cv_docx(cv, fixed)
             pdf_bytes = cv_pdf.render(cv, fixed, c.name) if pdf else None
@@ -805,6 +815,125 @@ def tailored_cv(key: str, url: str, format: str = "docx"):
         return Response(pdf, media_type="application/pdf",
                         headers={"Content-Disposition": f'attachment; filename="{name[:-5]}.pdf"'})
     return Response(docx, media_type=DOCX_TYPE, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+# ---------------------------------------------------------- applying faster --
+def apply_file(c: ja.Candidate) -> Path:
+    """How each older job is applied to, learnt from LinkedIn after it was saved (url -> type)."""
+    return ja.STATE_DIR / f"apply_{c.key}.json"
+
+
+_apply_file_lock = threading.Lock()
+
+
+def remember_posting(c: ja.Candidate, url: str, page: dict) -> None:
+    """Keep what a LinkedIn read found: the apply type, and the description if the job had none."""
+    with _apply_file_lock:
+        if page.get("apply"):
+            known = read_json(apply_file(c), {}) or {}
+            known[url] = page["apply"]
+            ja.write_json(apply_file(c), known)
+        if len(page.get("description") or "") >= 150:
+            cache = read_json(description_file(c), {}) or {}
+            if url not in cache:
+                cache[url] = page["description"]
+                ja.write_json(description_file(c), cache)
+
+
+def apply_type(c: ja.Candidate, job: dict, known: dict | None = None) -> tuple[str, str]:
+    """(type, email) for a job: what its search saw, what was learnt later, or an address in
+    the posting itself ("Send your CV to ...")."""
+    kind = (known if known is not None else read_json(apply_file(c), {}) or {}).get(job["url"]) or job.get("apply") or ""
+    email = job.get("apply_email", "") if kind in ("", "email", "site") else ""
+    if not email and kind in ("", "site"):
+        email = ja.apply_email(job.get("description", ""))
+    return ("email" if email else kind), email
+
+
+class ApplyChecks:
+    """Older LinkedIn jobs, saved before the app noted how they're applied to, are asked once each,
+    gently and one at a time, in the background (matches first). Stops at the first refused read."""
+    MOST = 60
+    PAUSE = 2.5
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.busy: set[str] = set()
+
+    def start(self, c: ja.Candidate, urls: list[str]) -> bool:
+        urls = urls[: self.MOST]
+        with self.lock:
+            if not urls or c.key in self.busy:
+                return c.key in self.busy
+            self.busy.add(c.key)
+        threading.Thread(target=self._work, args=(c, urls), daemon=True).start()
+        return True
+
+    def _work(self, c: ja.Candidate, urls: list[str]) -> None:
+        try:
+            for i, url in enumerate(urls):
+                if i:
+                    time.sleep(self.PAUSE)
+                page = ja.fetch_posting(url)
+                if page is None:
+                    break                       # blocked or offline: try again another time
+                remember_posting(c, url, page)
+        finally:
+            with self.lock:
+                self.busy.discard(c.key)
+
+
+APPLY_CHECKS = ApplyChecks()
+
+
+def start_apply_checks(c: ja.Candidate, rows: list[dict]) -> bool:
+    """Ask LinkedIn about jobs worth applying to whose apply type isn't known yet. True while it runs."""
+    if demo_on():
+        return False
+    order = {"strong": 0, "good": 1, "moderate": 2}
+    todo = sorted((r for r in rows if not r["apply"] and not r["applied"] and r["verdict"] in order
+                   and "linkedin.com/jobs/view/" in r["url"]), key=lambda r: (order[r["verdict"]], -r["fit"]))
+    return APPLY_CHECKS.start(c, [r["url"] for r in todo])
+
+
+@app.get("/api/apply-type/{key}")
+def check_apply_type(key: str, url: str):
+    """How one job is applied to; an older LinkedIn job is asked now (once), when it's opened."""
+    c = candidate(key)
+    job = job_detail(c, url)
+    if not job:
+        raise HTTPException(404, "Unknown job")
+    kind, email = apply_type(c, job)
+    if not kind and "linkedin.com/jobs/view/" in url and not demo_on():
+        page = ja.fetch_posting(url)
+        if page:
+            remember_posting(c, url, page)
+            if not job.get("description") and page.get("description"):
+                job["description"] = page["description"]
+            kind, email = apply_type(c, job)
+    return {"apply": kind, "apply_email": email}
+
+
+@app.get("/api/apply-kit/{key}")
+def apply_kit_for(key: str, url: str):
+    """Everything to apply to one job quickly: form answers, a cover note, the email subject."""
+    c = candidate(key)
+    job = job_detail(c, url)
+    if not job:
+        raise HTTPException(404, "Unknown job")
+    if len(job.get("description") or "") < 150:
+        job["description"] = (read_json(description_file(c), {}) or {}).get(url, job.get("description", ""))
+    prof, _ = profile_data(c)
+    with _cv_lock:
+        previous = ja.CANDIDATE
+        ja.CANDIDATE = c
+        try:
+            cv = guarded_cv(c, job)
+        finally:
+            ja.CANDIDATE = previous
+    kind, email = apply_type(c, job)
+    return {"answers": apply_kit.answers(prof, cv), "note": apply_kit.cover_note(prof, job, cv),
+            "subject": apply_kit.email_subject(prof, job), "apply": kind, "apply_email": email}
 
 
 # ------------------------------------------------------------------ email --
@@ -1134,7 +1263,8 @@ def overview(key: str):
 @app.get("/api/jobs/{key}")
 def jobs(key: str):
     c = candidate(key)
-    return {"jobs": job_rows(c), "thresholds": thresholds()}
+    rows = job_rows(c)
+    return {"jobs": rows, "thresholds": thresholds(), "checking_apply": start_apply_checks(c, rows)}
 
 
 @app.get("/api/runs/{key}")
@@ -1443,11 +1573,9 @@ def job_description(key: str, url: str):
         return {"description": cache[url]}
     if url not in load_state(c)["seen"]:
         raise HTTPException(404, "Unknown job")
-    text = ja.fetch_description(url)
-    if text:
-        cache[url] = text
-        ja.write_json(description_file(c), cache)
-    return {"description": text}
+    page = ja.fetch_posting(url) or {}
+    remember_posting(c, url, page)                  # the same read also tells how the job is applied to
+    return {"description": page.get("description", "")}
 
 
 @app.post("/api/profile/{key}/delete")

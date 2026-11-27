@@ -58,6 +58,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -693,6 +694,108 @@ def site_search_args(source: str) -> dict | None:
     return None
 
 
+# ------------------------------------------------- how a job is applied to --
+# "easy":  on the job site itself with the profile saved there (LinkedIn Easy Apply, Indeed Apply,
+#          Bayt Easy Apply) - a few minutes.
+# "email": the posting gives an address to send the CV to.
+# "site":  on the employer's own careers site - usually a longer form and an account.
+# "closed": the site no longer takes applications.   "": not known.
+APPLY_TYPES = ("easy", "email", "site", "closed")
+_apply_seen: dict[str, str] = {}            # JobSpy id ("li-123", "bayt-9") -> apply type, filled while searching
+_apply_lock = threading.Lock()
+
+
+def linkedin_apply_type(page: str) -> str:
+    """LinkedIn's public job page marks its Apply button: "apply-link-onsite" is Easy Apply,
+    "apply-link-offsite" sends people to the employer's site."""
+    page = page or ""
+    if "closed-job" in page or "No longer accepting applications" in page:
+        return "closed"
+    if "public_jobs_apply-link-onsite" in page:
+        return "easy"
+    if "public_jobs_apply-link-offsite" in page:
+        return "site"
+    return ""
+
+
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+APPLY_WORDS = re.compile(r"\b(?:cv|cvs|resume|résumé|resumes|apply|applying|application|applications|send|email|e-mail|"
+                         r"submit|share)\b|السيرة|سيرتك|التقديم|للتقديم|ارسال|إرسال", re.I)
+NOT_FOR_APPLYING = re.compile(r"^(?:no-?reply|donotreply|privacy|dpo|support|info@linkedin|abuse|webmaster)", re.I)
+
+
+def apply_email(description: str) -> str:
+    """The address a posting asks people to send their CV to ("Send your CV to hr@x.com"), or ""."""
+    text = re.sub(r"<[^>]+>", " ", description or "")
+    for match in EMAIL_RE.finditer(text):
+        address = match.group(0).strip(".")
+        if NOT_FOR_APPLYING.match(address) or address.lower().endswith((".png", ".jpg", ".gif")):
+            continue
+        around = text[max(0, match.start() - 160): match.end() + 60]
+        if APPLY_WORDS.search(around):
+            return address
+    return ""
+
+
+def watch_apply_types() -> None:
+    """Note how each job is applied to while JobSpy reads it, from the very page it already
+    downloads (no extra requests). Only adds a look; if JobSpy changes, the search is unaffected."""
+    try:
+        from jobspy.linkedin import LinkedIn
+    except Exception:  # noqa: BLE001 - an older/newer JobSpy without it: types stay unknown
+        LinkedIn = None
+    if LinkedIn is not None and callable(getattr(LinkedIn, "_fetch_details", None)) \
+            and not getattr(LinkedIn._fetch_details, "watched", False):
+        original = LinkedIn._fetch_details
+
+        def fetch_details(self, job_id, *args, **kwargs):
+            pages: list[str] = []
+            session = getattr(self, "session", None)
+            real_get = getattr(session, "get", None)
+            own = "get" in getattr(session, "__dict__", {})        # set on the object itself, not its class
+            if real_get is not None:
+                def get(*a, **k):
+                    response = real_get(*a, **k)
+                    try:
+                        pages.append(response.text)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return response
+                session.get = get
+            try:
+                return original(self, job_id, *args, **kwargs)
+            finally:
+                if real_get is not None:
+                    if own:
+                        session.get = real_get
+                    else:
+                        del session.get                 # back to the class's own method
+                kind = linkedin_apply_type(pages[-1]) if pages else ""
+                if kind:
+                    with _apply_lock:
+                        _apply_seen[f"li-{job_id}"] = kind
+        fetch_details.watched = True
+        LinkedIn._fetch_details = fetch_details
+    try:
+        from jobspy.bayt import Bayt
+    except Exception:  # noqa: BLE001
+        Bayt = None
+    if Bayt is not None and callable(getattr(Bayt, "_process_job", None)) \
+            and not getattr(Bayt._process_job, "watched", False):
+        original_bayt = Bayt._process_job
+
+        def process_job(self, job, *args, **kwargs):
+            try:
+                if job.select_one("div.jb-easy-apply a") is not None:
+                    with _apply_lock:
+                        _apply_seen[f"bayt-{job['data-job-id']}"] = "easy"
+            except Exception:  # noqa: BLE001
+                pass
+            return original_bayt(self, job, *args, **kwargs)
+        process_job.watched = True
+        Bayt._process_job = process_job
+
+
 def jobspy_row(row: dict, source: str) -> dict:
     """One JobSpy result as a raw item normalize() reads like the others."""
     def text(key: str) -> str:
@@ -703,6 +806,12 @@ def jobspy_row(row: dict, source: str) -> dict:
     item = {"_source": source, "id": job_id, "url": text("job_url"), "title": text("title"),
             "company": text("company"), "location": text("location"), "description": text("description"),
             "logo": text("company_logo"), "company_site": text("company_url_direct"), "posted": text("date_posted")[:10]}
+    with _apply_lock:
+        kind = _apply_seen.get(job_id, "")
+    if source == "indeed" and not kind:
+        # JobSpy keeps the apply link only when it leaves Indeed; none means Indeed's own quick apply.
+        kind = "site" if text("job_url_direct") else "easy"
+    item["apply"] = kind
     if source == "linkedin":
         item["jobId"] = job_id.removeprefix("li-")
     return item
@@ -717,6 +826,7 @@ def scrape(keywords: list[str], sources: list[str], hours: int | None = None) ->
 
     from concurrent.futures import ThreadPoolExecutor
 
+    watch_apply_types()
     hours = hours or SEARCH_HOURS
     queries = search_queries(keywords)
     plan = [(source, extra) for source in sources if (extra := site_search_args(source)) is not None]
@@ -853,6 +963,18 @@ def make_signature(title: str, company: str, place: str) -> str:
     return re.sub(r"[\W_]+", " ", f"{title} {company} {place}".lower()).strip()
 
 
+def set_apply(job: dict, kind: str) -> None:
+    """How the job is applied to: the site's own answer, or by email when the posting gives an
+    address to send the CV to (easier than the employer's site, not easier than Easy Apply)."""
+    kind = kind if kind in APPLY_TYPES else ""
+    address = apply_email(job.get("description", "")) if kind in ("", "site") else ""
+    if address:
+        kind = "email"
+        job["apply_email"] = address
+    if kind:
+        job["apply"] = kind
+
+
 def normalize(items: list[dict]) -> list[dict]:
     jobs = []
     for item in items:
@@ -871,19 +993,19 @@ def normalize(items: list[dict]) -> list[dict]:
             description += "\n\nSkills: " + "; ".join(str(s) for s in skills if s)
         logo = str(item.get("logo") or "").strip()
         posted = str(item.get("posted") or "")[:10]
-        jobs.append(
-            {
-                "url": url,
-                "title": title,
-                "company": company,
-                "location": place,
-                "description": description,
-                "source": source,
-                "signature": make_signature(title, company, place) or url,
-                "logo": logo if logo.startswith("https://") else "",
-                "posted": posted if re.fullmatch(r"\d{4}-\d\d-\d\d", posted) else "",
-            }
-        )
+        job = {
+            "url": url,
+            "title": title,
+            "company": company,
+            "location": place,
+            "description": description,
+            "source": source,
+            "signature": make_signature(title, company, place) or url,
+            "logo": logo if logo.startswith("https://") else "",
+            "posted": posted if re.fullmatch(r"\d{4}-\d\d-\d\d", posted) else "",
+        }
+        set_apply(job, str(item.get("apply") or ""))
+        jobs.append(job)
     missing = sum(1 for job in jobs if not job["description"])
     log.info("normalize: %d -> %d (%d without a description)", len(items), len(jobs), missing)
     return jobs
@@ -905,24 +1027,31 @@ BROWSER_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Appl
                                  "Chrome/131.0 Safari/537.36", "Accept-Language": "en-US,en;q=0.9"}
 
 
-def fetch_description(url: str) -> str:
-    """The full posting text for a job that arrived without one. LinkedIn shows it on its public job
-    page; Bayt refuses automated reads, so it returns "" there (and on any failure)."""
+def fetch_posting(url: str) -> dict | None:
+    """A LinkedIn job's public page, read once: {"description", "apply"}. None when it couldn't be
+    read (not LinkedIn, blocked, offline) - so nothing is remembered from a failed read. Bayt refuses
+    automated reads, so only LinkedIn is asked."""
     match = re.search(r"linkedin\.com/jobs/view/(?:[^/?#]*-)?(\d{6,})", url or "")
     if not match:
-        return ""
+        return None
     import requests
     from bs4 import BeautifulSoup
 
     try:
         r = requests.get(LINKEDIN_POSTING.format(id=match.group(1)), headers=BROWSER_HEADERS, timeout=12)
         if r.status_code != 200:
-            return ""
+            return None
         r.encoding = "utf-8"
         el = BeautifulSoup(r.text, "html.parser").select_one("div.show-more-less-html__markup, div.description__text")
-        return clean_description(el.decode_contents()) if el else ""
+        return {"description": clean_description(el.decode_contents()) if el else "",
+                "apply": linkedin_apply_type(r.text)}
     except Exception:  # noqa: BLE001 - a missing description is never worth failing a search
-        return ""
+        return None
+
+
+def fetch_description(url: str) -> str:
+    """The full posting text for a job that arrived without one ("" when it can't be read)."""
+    return (fetch_posting(url) or {}).get("description", "")
 
 
 def fill_descriptions(jobs: list[dict]) -> None:
@@ -934,12 +1063,17 @@ def fill_descriptions(jobs: list[dict]) -> None:
     if not missing:
         return
     with ThreadPoolExecutor(max_workers=3) as pool:
-        texts = list(pool.map(lambda job: fetch_description(job["url"]), missing))
+        pages = list(pool.map(lambda job: fetch_posting(job["url"]), missing))
     got = 0
-    for job, text in zip(missing, texts):
-        if len(text) >= 150:
-            job["description"] = text
+    for job, page in zip(missing, pages):
+        page = page or {}
+        if len(page.get("description", "")) >= 150:
+            job["description"] = page["description"]
             got += 1
+        if page.get("apply") or (not job.get("apply") and page.get("description")):
+            job.pop("apply", None)
+            job.pop("apply_email", None)
+            set_apply(job, page.get("apply", ""))     # the email check now reads the full description too
     log.info("descriptions: fetched %d of %d that LinkedIn left out", got, len(missing))
 
 

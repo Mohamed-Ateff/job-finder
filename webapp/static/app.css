@@ -288,11 +288,9 @@ select.field, select.ed { appearance: none; padding-inline-end: 28px; cursor: po
 .day { position: sticky; top: 0; z-index: 1; padding: 14px 20px 6px; background: var(--bg); color: var(--ink-3);
   font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }
 .has-tools .day { top: 52px; }
-/* Matches' own two tabs (my country / remote): a quieter row under the main one */
-.list-tools .seg.sub { width: auto; min-width: 220px; margin-top: 8px; background: transparent; box-shadow: none; }
-.list-tools .seg.sub::before { background: var(--raise); box-shadow: inset 0 0 0 1px var(--line); }
-.list-tools .seg.sub button { height: 24px; font-size: 12px; }
-.has-sub .day { top: 86px; }
+/* Matches' own two tabs (my country / remote): the same control, in a second row */
+.list-tools .seg.sub { margin-top: 8px; }
+.has-sub .day { top: 90px; }
 
 .row { position: relative; display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: 0 13px; align-items: center;
   width: 100%; padding: 13px 20px; border: 0; border-bottom: 1px solid var(--line-2); background: transparent; color: inherit;
@@ -789,7 +787,7 @@ html[dir="rtl"] [dir="auto"]:not(pre):not(input):not(textarea) { text-align: rig
   .large-title { display: block; margin: 0; padding: 14px 20px 6px; font: var(--hw) calc(38px * var(--hs))/1.05 var(--head); letter-spacing: var(--ht); }
   html[dir="rtl"] .large-title { font-weight: 600; font-size: 32px; }
   .has-tools .day { top: 52px; }
-  .has-sub .day { top: 86px; }
+  .has-sub .day { top: 90px; }
   .row { padding: 13px 18px; }
   .detail-pane { position: fixed; inset: 0; z-index: 20; padding-top: calc(var(--bar-h) + env(safe-area-inset-top));
     padding-bottom: env(safe-area-inset-bottom); transform: translateX(100%); transition: transform .32s var(--ease); }

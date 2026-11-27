@@ -698,7 +698,8 @@ def search_queries(keywords: list[str]) -> list[str]:
 
 # Where remote jobs are also searched for people open to remote work: LinkedIn's region names.
 # (Worldwide is mostly remote jobs open only to Americans or Canadians, so it isn't searched.)
-REMOTE_REGIONS = ["Middle East", "EMEA"]
+REMOTE_REGIONS = ["Middle East", "EMEA"]          # the default; each person chooses their own in the profile
+MAX_REMOTE_PLACES = 6                            # each place is another round of LinkedIn searches
 # A remote job that's only open to people in another country: "must be based in the UK",
 # "authorized to work in the United States", "EU residents only".
 REMOTE_ONLY_IN = re.compile(
@@ -939,8 +940,10 @@ def remote_searches(source: str) -> list[dict]:
     searched country's own remote jobs are already in its normal search)."""
     if source != "linkedin" or not getattr(CANDIDATE, "remote", False):
         return []
-    return [{"location": region, "fetch_description": True, "is_remote": True}
-            for region in REMOTE_REGIONS if region.lower() != LOCATION.strip().lower()]
+    places = getattr(CANDIDATE, "remote_places", None)
+    places = REMOTE_REGIONS if places is None else places
+    return [{"location": place, "fetch_description": True, "is_remote": True}
+            for place in places[:MAX_REMOTE_PLACES] if place.lower() != LOCATION.strip().lower()]
 
 
 def scrape(keywords: list[str], sources: list[str], hours: int | None = None) -> list[dict]:
@@ -2123,6 +2126,7 @@ class Candidate:
     years: int | None = None                       # years of experience ("4+" -> 4)
     remote: bool = False                           # open to remote work: remote jobs abroad are searched too
     languages_text: str = ""                       # languages they list: remote postings in others are skipped
+    remote_places: list[str] | None = None         # where remote jobs are searched (None = REMOTE_REGIONS)
     company_block_re: re.Pattern | None = None     # employers whose jobs are dropped before scoring
 
 
@@ -2198,6 +2202,8 @@ def set_work_facts(c: Candidate, prof: dict) -> Candidate:
     c.skills_text = " | ".join([prof.get("headline") or "", *(prof.get("cv") or {}).get("skills", [])])
     c.years = basic_ai.years_of(prefs.get("years", ""))
     c.remote = "remote" in (prefs.get("work_modes") or [])
+    places = (prof.get("search") or {}).get("remote_places")
+    c.remote_places = list(places) if isinstance(places, list) else None
     c.languages_text = " | ".join(str(x) for x in (prof.get("cv") or {}).get("languages", []) or [])
     return c
 

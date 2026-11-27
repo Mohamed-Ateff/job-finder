@@ -87,8 +87,14 @@ window.AR = {
   "Write an email": "اكتب رسالة", "PDF": "PDF", "Word": "Word",
   "Best for applying online": "الأنسب للتقديم عبر الإنترنت", "To edit before sending": "للتعديل قبل الإرسال",
   "No Remote Matches Yet": "لا توجد وظائف عن بُعد مناسبة بعد",
-  "Remote jobs that fit are listed here. They’re searched when the profile includes remote work.":
-    "تظهر هنا الوظائف عن بُعد المناسبة. يُبحث عنها عندما يتضمّن الملف العمل عن بُعد.",
+  "Remote jobs that fit are listed here. Choose where they’re searched in the Profile, under Work Preferences.":
+    "تظهر هنا الوظائف عن بُعد المناسبة. اختر أماكن البحث عنها في الملف، ضمن تفضيلات العمل.",
+  "My country": "بلدي", "Remote jobs from": "وظائف عن بُعد من",
+  "Where remote jobs are searched, besides your own country. Each place adds a little to each search.":
+    "الأماكن التي يُبحث فيها عن وظائف عن بُعد، إلى جانب بلدك. كل مكان يضيف قليلاً إلى وقت البحث.",
+  "Middle East": "الشرق الأوسط", "EMEA": "أوروبا والشرق الأوسط وأفريقيا", "European Union": "الاتحاد الأوروبي",
+  "United Kingdom": "المملكة المتحدة", "Germany": "ألمانيا", "Netherlands": "هولندا", "United States": "الولايات المتحدة",
+  "Canada": "كندا", "Worldwide": "كل العالم",
   "Looking for the company’s email…": "جارٍ البحث عن بريد الشركة…", "No email on the company’s website": "لا يوجد بريد على موقع الشركة",
   "The company’s website": "موقع الشركة",
   "Search every morning": "ابحث كل صباح", "Off": "إيقاف", "On": "تشغيل",

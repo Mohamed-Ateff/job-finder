@@ -208,8 +208,9 @@ const VIEWS = {
   guide: { title: "How It Works", tab: "Guide", icon: "book", kind: "page", needs: ["profile"] },
 };
 const ROUTE_ALIASES = { matches: "jobs", digests: "jobs", setup: "profile" };   // old links still land somewhere sensible
-/* Matches split in two: jobs in the person's own country, and remote ones. Then everything, and Applied. */
-const filters = () => [["matches", C().country || "Matches"], ["remote", "Remote"], ["all", "All"], ["applied", "Applied"]];
+const FILTERS = [["matches", "Matches"], ["all", "All"], ["applied", "Applied"]];
+/* Under Matches: the person's own country, or remote jobs. */
+const places = () => [["local", C().country || "My country"], ["remote", "Remote"]];
 const VERDICT = { strong: "Strong", good: "Good", moderate: "Moderate", weak: "Weak" };
 const MODES = {
   dry: { label: "Preview", start: "Start Preview",
@@ -235,7 +236,7 @@ const S = {
   candidates: [], key: store.get("candidate", null), view: "jobs", appearance: store.get("appearance", "auto"),
   cache: {}, sel: {}, query: "", filter: "matches", forms: {}, runs: {}, finishedAt: {}, poll: null, token: 0,
   expanded: null, trackOpen: null, detailOpen: false, booted: false, painted: "", before: {},
-  applying: null, company: {},
+  applying: null, company: {}, where: store.get("where", "local") === "remote" ? "remote" : "local",
 };
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 const cand = () => S.candidates.find((c) => c.key === S.key) || S.candidates[0];
@@ -529,8 +530,7 @@ function paintMain(quiet) {
 /* =============================================================== lists */
 const isMatch = (j) => j.verdict === "strong" || j.verdict === "good";function jobsFor() {
   let rows = C().jobs || [];
-  if (S.filter === "matches") rows = rows.filter((j) => isMatch(j) && !j.remote);
-  else if (S.filter === "remote") rows = rows.filter((j) => isMatch(j) && j.remote);  else if (S.filter === "applied") rows = rows.filter((j) => j.applied);
+  if (S.filter === "matches") rows = rows.filter((j) => isMatch(j) && Boolean(j.remote) === (S.where === "remote"));  else if (S.filter === "applied") rows = rows.filter((j) => j.applied);
   const q = S.query.trim().toLowerCase();
   if (q) rows = rows.filter((j) => `${j.title} ${j.company} ${j.location} ${j.track_name}`.toLowerCase().includes(q));
   // The latest search's jobs first, best score first; everything older below, as before.
@@ -548,10 +548,12 @@ function paintList(quiet) {
   // Nothing at all yet (not just a filter or search with no hits): one calm, centred empty state, no reader pane.
   const blank = !all.length && !S.query;
   $(".split")?.classList.toggle("is-empty", blank);
-  const counts = { new: all.filter((j) => j.new).length, matches: all.filter((j) => isMatch(j) && !j.remote).length,
-    remote: all.filter((j) => isMatch(j) && j.remote).length, all: all.length, applied: all.filter((j) => j.applied).length };
-  const tools = all.length ? `<div class="list-tools">${seg("filter",
-    filters().map(([v, label]) => [v, `<span class="seg-label">${esc(t(label))}</span><span class="seg-n">${counts[v]}</span>`]), S.filter)}</div>` : "";
+  const counts = { new: all.filter((j) => j.new).length, matches: all.filter(isMatch).length, all: all.length,
+    applied: all.filter((j) => j.applied).length, local: all.filter((j) => isMatch(j) && !j.remote).length,
+    remote: all.filter((j) => isMatch(j) && j.remote).length };
+  const label = ([v, name]) => [v, `<span class="seg-label">${esc(t(name))}</span><span class="seg-n">${counts[v]}</span>`];
+  const tools = all.length ? `<div class="list-tools">${seg("filter", FILTERS.map(label), S.filter)}${S.filter === "matches"
+    ? seg("where", places().map(label), S.where, "sub") : ""}</div>` : "";
   let body = "";
   if (!items.length) {
     body = emptyListHtml();
@@ -565,6 +567,7 @@ function paintList(quiet) {
   }
   const y = list.scrollTop;
   list.classList.toggle("has-tools", Boolean(tools));
+  list.classList.toggle("has-sub", Boolean(tools) && S.filter === "matches");
   list.innerHTML = `<h2 class="large-title">${esc(t(VIEWS[S.view].title))}</h2>${tools}${all.length ? searchCardHtml() : ""}${body}`;
   if (quiet) list.scrollTop = y;
 }
@@ -600,14 +603,14 @@ function emptyListHtml() {
   const all = C().jobs || [], runs = C().summary?.runs || [];
   const name = `<bdi>${esc(first())}</bdi>`;
   if (!all.length) return welcomeHtml();
-  if (all.length && S.filter === "matches") {
+  if (all.length && S.filter === "matches" && S.where !== "remote") {
     return `<div class="empty">${icon("tray", 40, "", 1.3)}<h2>${esc(t("No Strong Matches Yet"))}</h2>
       <p>${esc(t("{jobs} scored so far, none at {good} or above.", { jobs: count(all.length, "job"), good: C().summary.thresholds.good }))}</p>
       <button class="btn large" data-filter-to="all">${esc(t("Show All Jobs"))}</button></div>`;
   }
-  if (all.length && S.filter === "remote") {
+  if (all.length && S.filter === "matches") {
     return `<div class="empty">${icon("globe", 40, "", 1.3)}<h2>${esc(t("No Remote Matches Yet"))}</h2>
-      <p>${esc(t("Remote jobs that fit are listed here. They’re searched when the profile includes remote work."))}</p>
+      <p>${esc(t("Remote jobs that fit are listed here. Choose where they’re searched in the Profile, under Work Preferences."))}</p>
       <button class="btn large" data-filter-to="all">${esc(t("Show All Jobs"))}</button></div>`;
   }
   if (all.length && S.filter === "applied") {
@@ -1285,6 +1288,9 @@ const PROFILE_SECTIONS = {
     return psec("prefs", t("Work Preferences"), `<div class="props">
       ${prop("Years of experience", edit("preferences.years", p.years, { placeholder: "e.g. 9" }))}
       ${prop("Work arrangement", chips("preferences.work_modes", opt.work_modes.map((m) => [m, t(MODE_LABEL[m] || m)]), p.work_modes, true))}
+      ${(p.work_modes || []).includes("remote") ? prop("Remote jobs from", chips("search.remote_places",
+        (opt.remote_places || []).map((x) => [x, t(x)]), f.search.remote_places || [], true),
+        { top: true, help: "Where remote jobs are searched, besides your own country. Each place adds a little to each search." }) : ""}
       ${prop("Job type", chips("preferences.job_types", opt.job_types.map((x) => [x, t(TYPE_LABEL[x] || x)]), p.job_types, true))}
       ${prop("Relocation", area("preferences.relocate", p.relocate, "e.g. Jeddah or Dubai", "text", 1))}
       ${prop("Notice period", edit("preferences.notice", p.notice, { placeholder: "e.g. One month" }))}
@@ -1308,7 +1314,8 @@ const PROFILE_SECTIONS = {
   notes: (v, f) => psec("notes", t("Notes for ChatGPT"), area("notes", f.notes, "e.g. Egyptian, living in Riyadh. Won’t relocate. Available in one month.", "text", 2)),
 };
 const profileSection = (id, v, f) => PROFILE_SECTIONS[id](v, f);
-const SECTION_OF = (path) => (path.startsWith("search.") ? "search" : path.startsWith("preferences.") ? "prefs"
+const SECTION_OF = (path) => (path === "search.remote_places" ? "prefs" : path.startsWith("search.") ? "search"
+  : path.startsWith("preferences.") ? "prefs"
   : { "cv.skills": "skills", "cv.experience": "experience", "cv.education": "education" }[path]);
 
 function profileHtml() {
@@ -2196,6 +2203,7 @@ async function toggleApplied(url) {
 function onSeg(name, value) {
   if (name === "appearance") return applyAppearance(value, true);
   if (name === "filter") { S.filter = value; paintList(false); paintBar(); return paintDetail(true); }
+  if (name === "where") { S.where = value; store.set("where", value); paintList(false); return paintDetail(true); }
   if (name === "lang") return value !== LANG && applyLang(value);
   if (name === "hours") return saveSetting("SEARCH_HOURS", value);
   if (name === "daily") return saveSetting("DAILY_SEARCH", value);

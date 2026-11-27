@@ -1600,7 +1600,8 @@ def profile_view(c: ja.Candidate, found: list[str] | None = None, source: str = 
         "groups": groups,
         "options": {"countries": profiles.COUNTRIES, "levels": profiles.LEVELS,
                     "sites": [{"key": k, "label": label} for k, label in ja.SITES.items()],
-                    "work_modes": profiles.WORK_MODES, "job_types": profiles.JOB_TYPES},
+                    "work_modes": profiles.WORK_MODES, "job_types": profiles.JOB_TYPES,
+                    "remote_places": profiles.REMOTE_PLACES},
         "system_label": c.system_label,
         "tracks": tracks,
         "draft": c.kind == "advanced",          # Atef's tracks are a draft until the client approves them

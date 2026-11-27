@@ -28,6 +28,11 @@ EARLY_LEVELS = {"entry", "associate"}
 COUNTRIES = ["Saudi Arabia", "United Arab Emirates", "Qatar", "Kuwait", "Bahrain", "Oman", "Egypt"]
 SITES = ["linkedin", "indeed", "bayt"]
 WORK_MODES = ["on-site", "hybrid", "remote"]
+# Where remote jobs are searched for someone open to remote work: LinkedIn's own place names.
+REMOTE_PLACES = ["Middle East", "EMEA", "European Union", "Saudi Arabia", "United Arab Emirates", "Qatar", "Kuwait",
+                 "Bahrain", "Oman", "Egypt", "United Kingdom", "Germany", "Netherlands", "United States", "Canada",
+                 "Worldwide"]
+DEFAULT_REMOTE_PLACES = ["Middle East", "EMEA"]
 JOB_TYPES = ["full-time", "part-time", "contract"]
 # How the person wants to work (mostly from the questionnaire): shown in the app and read by
 # ChatGPT, never written into a CV.
@@ -59,7 +64,8 @@ def blank(name: str = "") -> dict:
         # keywords: words that show a posting is in the person's field (free scoring looks for them);
         # exclude_companies: employers whose jobs are dropped before scoring.
         "search": {"titles": [], "country": "Saudi Arabia", "levels": ["mid-senior"],
-                   "sites": ["linkedin", "indeed"], "exclude": [], "keywords": [], "exclude_companies": []},
+                   "sites": ["linkedin", "indeed"], "exclude": [], "keywords": [], "exclude_companies": [],
+                   "remote_places": list(DEFAULT_REMOTE_PLACES)},
         "cv": {"summary": [], "achievements": [], "experience": [], "skills": [], "education": [],
                "certifications": [], "languages": [], "training": [], "awards": []},
         "preferences": {"years": "", "work_modes": [], "job_types": [], "relocate": "", "notice": "",
@@ -135,6 +141,9 @@ def clean(data: dict, *, base: dict | None = None) -> dict:
     out["search"]["exclude"] = _items(search.get("exclude"), 40, 30)
     out["search"]["keywords"] = _items(search.get("keywords"), 60, 30)
     out["search"]["exclude_companies"] = _items(search.get("exclude_companies"), 80, 30)
+    places = search.get("remote_places")
+    out["search"]["remote_places"] = ([p for p in REMOTE_PLACES if p in places] if isinstance(places, list)
+                                      else list(DEFAULT_REMOTE_PLACES))
 
     prefs = data.get("preferences") or {}
     for key, limit in PREFERENCE_TEXT.items():
